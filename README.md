@@ -99,7 +99,7 @@ ReRouted is an independent project and is not affiliated with or endorsed by any
 
 ### 1. Install
 
-[Download ReRouted 0.4.2 for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/download/v0.4.2/ReRouted-0.4.2-arm64.dmg), open the DMG, and drag ReRouted to Applications.
+[Download ReRouted 0.4.3 for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/download/v0.4.3/ReRouted-0.4.3-arm64.dmg), open the DMG, and drag ReRouted to Applications.
 
 ReRouted requires Apple Silicon and macOS 12 Monterey or newer.
 
@@ -200,7 +200,7 @@ The implementation is intentionally small: Electron, Node's built-in HTTP server
 
 ## Current release
 
-ReRouted `0.4.2` ships for Apple Silicon macOS with hardened OAuth callbacks and renderer lock boundaries, uncapped SQLite usage history, 60-second quota refreshes while the Quota page is open, masked account identities, and image inputs in chat completions. Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
+ReRouted `0.4.3` fixes compact usage metrics so billion and trillion totals display with `B` and `T` units instead of continuing to grow in millions. It includes the hardened OAuth callbacks and renderer lock boundaries, uncapped SQLite usage history, 60-second quota refreshes while the Quota page is open, masked account identities, and image inputs introduced in `0.4.2`. Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
 
 ReRouted is an independent personal project.
 

@@ -63,10 +63,10 @@ function demoUsage(period = "24h") {
     requests: 148,
     ok: 143,
     errors: 5,
-    prompt_tokens: 184_200,
-    completion_tokens: 61_480,
-    cached_tokens: 92_600,
-    total_tokens: 338_280,
+    prompt_tokens: 1_486_000_000,
+    completion_tokens: 661_000_000,
+    cached_tokens: 483_648,
+    total_tokens: 2_147_483_648,
     byModel: [
       { model: "coding", requests: 92, prompt_tokens: 121_000, completion_tokens: 42_300 },
       { model: "chatgpt/gpt-5", requests: 38, prompt_tokens: 45_800, completion_tokens: 13_100 },
@@ -543,6 +543,26 @@ app.whenReady().then(async () => {
       settings: ".settings-group",
     }[p] || "#view > *";
     await capture(`app-${p}.png`, selector);
+    if (p === "home") {
+      await win.webContents.executeJavaScript(`
+        (() => {
+          const value = document.querySelector("[data-home-tokens]")?.textContent.trim();
+          if (value !== "2.1B") throw new Error("Unexpected billion token format: " + value);
+          return true;
+        })()
+      `);
+    }
+    if (p === "stats") {
+      await win.webContents.executeJavaScript(`
+        (() => {
+          const metrics = [...document.querySelectorAll(".metric")];
+          const tokens = metrics.find((metric) => metric.querySelector(".metric-label")?.textContent.trim() === "Tokens");
+          const value = tokens?.querySelector(".metric-value")?.textContent.trim();
+          if (value !== "2.1B") throw new Error("Unexpected activity token format: " + value);
+          return true;
+        })()
+      `);
+    }
     if (p === "providers") {
       await win.webContents.executeJavaScript(`
         (() => {
