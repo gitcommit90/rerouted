@@ -32,8 +32,16 @@ const {
 } = require("./lib/oauth");
 const { createQuotaService } = require("./lib/quota");
 const { createSessionAuth, isMacSessionActive } = require("./lib/session-auth");
+const {
+  canInvoke,
+  hasAdminPassword,
+  isAllowedExternalUrl,
+  lockedError,
+  redactLockedState,
+} = require("./lib/ipc-security");
 const { runProviderModelTest } = require("./lib/model-test");
 const { createUpdateService } = require("./lib/updater");
+const { acquireSingleInstance } = require("./lib/single-instance");
 const { KEYED_PRESETS, ONBOARDING_STEPS, DEFAULT_PORT, OAUTH } = require("./lib/constants");
 const openaiCompat = require("./lib/providers/openai-compat");
 const { defaultModelsForType, listProviderModels, getAdapter } = require("./lib/providers");
@@ -47,20 +55,20 @@ const {
 } = require("./lib/combos");
 
 // ─── Paths / single instance ───────────────────────────────────────────
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-}
+const gotLock = acquireSingleInstance(app);
+
+if (gotLock) {
 
 const userData = process.env.REROUTED_USER_DATA || app.getPath("userData");
 const configPath = path.join(userData, "config.json");
-const usagePath = path.join(userData, "usage.json");
+const usagePath = path.join(userData, "usage.sqlite");
+const legacyUsagePath = path.join(userData, "usage.json");
 const logPath = path.join(userData, "rerouted.log");
 logger.configure(logPath);
 logger.info("ReRouted starting", { userData, logPath });
 
 const store = createStore(configPath);
-const usage = createUsageStore(usagePath);
+const usage = createUsageStore(usagePath, { legacyPath: legacyUsagePath });
 const router = createRouter({ store, usage });
 const gateway = createGateway({ store, router });
 const sessionAuth = createSessionAuth();
@@ -125,15 +133,20 @@ function setMacSessionUnlocked(value) {
   sessionAuth.setMacSessionUnlocked(value);
   if (panel && !panel.isDestroyed()) {
     const cfg = store.load();
-    const hasPassword = !!cfg.adminPasswordHash && cfg.adminPasswordHash !== "harness";
+    const hasPassword = hasAdminPassword(cfg);
     panel.webContents.send("app:session-lock-changed", {
       unlocked: sessionAuth.isUnlocked(hasPassword),
     });
   }
 }
 
+function harnessModeEnabled() {
+  return !app.isPackaged && !!process.env.REROUTED_STATE;
+}
+
 // Dev / harness state jump
 function applyStateEnv() {
+  if (!harnessModeEnabled()) return;
   const st = process.env.REROUTED_STATE;
   if (!st) return;
   if (st === "fresh") {
@@ -202,9 +215,11 @@ function createPanel() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
+  panel.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  panel.webContents.on("will-navigate", (event) => event.preventDefault());
   panel.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   panel.loadFile(path.join(__dirname, "renderer", "index.html"));
 
@@ -262,6 +277,17 @@ function updateTrayTitle() {
 
 // ─── IPC ───────────────────────────────────────────────────────────────
 function registerIpc() {
+  const handle = (channel, handler) => {
+    ipcMain.handle(channel, async (...args) => {
+      const cfg = store.load();
+      if (!canInvoke(channel, cfg, sessionAuth, { harness: harnessModeEnabled() })) {
+        logger.warn("Blocked locked IPC request", { channel });
+        return lockedError();
+      }
+      return handler(...args);
+    });
+  };
+
   function publicActivityEntry(entry, cfg) {
     return {
       ...hydrateUsageIdentity(entry, cfg.providers),
@@ -292,7 +318,7 @@ function registerIpc() {
     };
   }
 
-  ipcMain.handle("app:get-state", async () => {
+  handle("app:get-state", async () => {
     const cfg = store.load();
     const publicProviders = (cfg.providers || []).map((p) => {
       const models = listProviderModels(p, { includeDisabled: true }).map((m) => ({
@@ -324,9 +350,10 @@ function registerIpc() {
       createdAt: k.createdAt,
     }));
     // Primary key for simple copy on Home / onboarding
-    const primaryKey =
-      apiKeys.find((k) => k.enabled !== false)?.key || cfg.apiKey || "";
-    return {
+    const primaryKey = apiKeys.find((k) => k.enabled !== false)?.key || "";
+    const hasPassword = hasAdminPassword(cfg);
+    const unlocked = sessionAuth.isUnlocked(hasPassword) || harnessModeEnabled();
+    return redactLockedState({
       onboardingComplete: !!cfg.onboardingComplete,
       appVersion: app.getVersion(),
       update: updateService?.state() || {
@@ -354,20 +381,18 @@ function registerIpc() {
       combos: (cfg.combos || []).map(publicCombo),
       stats: publicStats(router.stats(), cfg),
       usage: publicUsage(router.usageAggregate("24h"), cfg),
-      unlocked: sessionAuth.isUnlocked(
-        !!cfg.adminPasswordHash && cfg.adminPasswordHash !== "harness"
-      ) || !!process.env.REROUTED_STATE,
-      hasAdminPassword: !!cfg.adminPasswordHash && cfg.adminPasswordHash !== "harness",
+      unlocked,
+      hasAdminPassword: hasPassword,
       oauthProviders: Object.keys(OAUTH).map((k) => ({
         id: k,
         name: OAUTH[k].name,
       })),
       keyedPresets: Object.values(KEYED_PRESETS),
       steps: ONBOARDING_STEPS,
-    };
+    });
   });
 
-  ipcMain.handle("app:set-onboarding-step", async (_e, step) => {
+  handle("app:set-onboarding-step", async (_e, step) => {
     store.update((cfg) => {
       cfg.onboardingStep = step;
       if (step === "done") cfg.onboardingComplete = true;
@@ -375,7 +400,7 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:complete-onboarding", async () => {
+  handle("app:complete-onboarding", async () => {
     store.update((cfg) => {
       cfg.onboardingComplete = true;
       cfg.onboardingStep = "done";
@@ -383,7 +408,7 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:set-open-at-login", async (_e, enabled) => {
+  handle("app:set-open-at-login", async (_e, enabled) => {
     app.setLoginItemSettings({ openAtLogin: !!enabled, openAsHidden: true });
     store.update((cfg) => {
       cfg.openAtLogin = !!enabled;
@@ -391,7 +416,7 @@ function registerIpc() {
     return { ok: true, openAtLogin: !!enabled };
   });
 
-  ipcMain.handle("app:set-admin-password", async (_e, password) => {
+  handle("app:set-admin-password", async (_e, password) => {
     if (!password || String(password).length < 4) {
       return { ok: false, error: "Password must be at least 4 characters" };
     }
@@ -403,7 +428,7 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:verify-admin-password", async (_e, password) => {
+  handle("app:verify-admin-password", async (_e, password) => {
     const cfg = store.load();
     if (!cfg.adminPasswordHash || cfg.adminPasswordHash === "harness") {
       sessionAuth.setManualUnlocked(true);
@@ -414,7 +439,7 @@ function registerIpc() {
     return { ok };
   });
 
-  ipcMain.handle("app:change-admin-password", async (_e, { current, next }) => {
+  handle("app:change-admin-password", async (_e, { current, next }) => {
     const cfg = store.load();
     if (cfg.adminPasswordHash && cfg.adminPasswordHash !== "harness") {
       const ok = await verifyPassword(current, cfg.adminPasswordHash);
@@ -430,12 +455,12 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:detect-providers", async () => {
+  handle("app:detect-providers", async () => {
     detectedCache = await detectAll();
     return { ok: true, found: summarizeDetected(detectedCache) };
   });
 
-  ipcMain.handle("app:import-detected", async (_e, ids) => {
+  handle("app:import-detected", async (_e, ids) => {
     const want = new Set(ids || []);
     const toImport = detectedCache.filter((d) => want.has(d.id));
     store.update((cfg) => {
@@ -469,7 +494,7 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:oauth-start", async (_e, type) => {
+  handle("app:oauth-start", async (_e, type) => {
     try {
       logger.oauth(`UI requested OAuth start for ${type}`);
       const result = await startOAuth(type);
@@ -491,14 +516,14 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("app:oauth-status", async (_e, type) => oauthStatus(type));
+  handle("app:oauth-status", async (_e, type) => oauthStatus(type));
 
-  ipcMain.handle("app:oauth-cancel", async (_e, type) => {
+  handle("app:oauth-cancel", async (_e, type) => {
     clearPending(type);
     return { ok: true };
   });
 
-  ipcMain.handle("app:oauth-complete", async (_e, { type, pasteCode, providerId }) => {
+  handle("app:oauth-complete", async (_e, { type, pasteCode, providerId }) => {
     try {
       logger.oauth(`UI requested OAuth complete for ${type}`, {
         providerId: providerId || null,
@@ -548,7 +573,7 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("app:logs-get", async (_e, limit) => {
+  handle("app:logs-get", async (_e, limit) => {
     return {
       ok: true,
       entries: logger.list(limit || 200),
@@ -556,13 +581,13 @@ function registerIpc() {
     };
   });
 
-  ipcMain.handle("app:logs-clear", async () => {
+  handle("app:logs-clear", async () => {
     logger.clear();
     logger.info("Logs cleared by user");
     return { ok: true };
   });
 
-  ipcMain.handle("app:logs-reveal", async () => {
+  handle("app:logs-reveal", async () => {
     const f = logger.getFilePath();
     if (f) {
       shell.showItemInFolder(f);
@@ -571,7 +596,7 @@ function registerIpc() {
     return { ok: false, error: "No log file" };
   });
 
-  ipcMain.handle("app:add-keyed-provider", async (_e, payload) => {
+  handle("app:add-keyed-provider", async (_e, payload) => {
     const { preset, name, baseUrl, apiKey, accountId, models } = payload || {};
     let finalBase = baseUrl;
     let finalName = name;
@@ -599,7 +624,7 @@ function registerIpc() {
     return { ok: true, id: prov.id };
   });
 
-  ipcMain.handle("app:test-keyed-provider", async (_e, { baseUrl, apiKey }) => {
+  handle("app:test-keyed-provider", async (_e, { baseUrl, apiKey }) => {
     try {
       const models = await openaiCompat.listModels({ baseUrl, apiKey });
       return { ok: true, models };
@@ -608,7 +633,7 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("app:remove-provider", async (_e, id) => {
+  handle("app:remove-provider", async (_e, id) => {
     store.update((cfg) => {
       cfg.providers = cfg.providers.filter((p) => p.id !== id);
       for (const c of cfg.combos) {
@@ -618,7 +643,7 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:set-provider-enabled", async (_e, { id, enabled }) => {
+  handle("app:set-provider-enabled", async (_e, { id, enabled }) => {
     let found = false;
     store.update((cfg) => {
       const p = cfg.providers.find((x) => x.id === id);
@@ -630,7 +655,7 @@ function registerIpc() {
     return { ok: found, enabled: !!enabled };
   });
 
-  ipcMain.handle("app:usage", async (_e, period) => {
+  handle("app:usage", async (_e, period) => {
     const cfg = store.load();
     return {
       ok: true,
@@ -639,15 +664,15 @@ function registerIpc() {
     };
   });
 
-  ipcMain.handle("app:quota-get", async () => {
+  handle("app:quota-get", async () => {
     return { ok: true, quota: quota.current() };
   });
 
-  ipcMain.handle("app:quota-refresh", async () => {
+  handle("app:quota-refresh", async () => {
     return { ok: true, quota: await quota.refresh() };
   });
 
-  ipcMain.handle("app:save-combo", async (_e, combo) => {
+  handle("app:save-combo", async (_e, combo) => {
     const name = String(combo?.name || "").trim();
     if (!name) return { ok: false, error: "Model ID is required" };
     const current = store.load();
@@ -684,21 +709,21 @@ function registerIpc() {
     return { ok: true, combos: store.load().combos.map(publicCombo) };
   });
 
-  ipcMain.handle("app:delete-combo", async (_e, id) => {
+  handle("app:delete-combo", async (_e, id) => {
     store.update((cfg) => {
       cfg.combos = cfg.combos.filter((c) => !comboMatchesId(c, id));
     });
     return { ok: true };
   });
 
-  ipcMain.handle("app:set-server-enabled", async (_e, enabled) => {
+  handle("app:set-server-enabled", async (_e, enabled) => {
     store.update((cfg) => {
       cfg.serverEnabled = !!enabled;
     });
     return { ok: true };
   });
 
-  ipcMain.handle("app:set-bind-host", async (_e, bindHost) => {
+  handle("app:set-bind-host", async (_e, bindHost) => {
     const h = bindHost === "0.0.0.0" ? "0.0.0.0" : "127.0.0.1";
     store.update((cfg) => {
       cfg.bindHost = h;
@@ -711,7 +736,7 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("app:create-api-key", async (_e, name) => {
+  handle("app:create-api-key", async (_e, name) => {
     const key = generateApiKey();
     const entry = {
       id: generateId("key"),
@@ -727,7 +752,7 @@ function registerIpc() {
     return { ok: true, key: entry };
   });
 
-  ipcMain.handle("app:revoke-api-key", async (_e, id) => {
+  handle("app:revoke-api-key", async (_e, id) => {
     store.update((cfg) => {
       cfg.apiKeys = (cfg.apiKeys || []).filter((k) => k.id !== id);
       if (!cfg.apiKeys.length) {
@@ -736,21 +761,21 @@ function registerIpc() {
           { id: generateId("key"), key, name: "Default", createdAt: Date.now(), enabled: true },
         ];
       }
-      cfg.apiKey = cfg.apiKeys.find((k) => k.enabled !== false)?.key || cfg.apiKeys[0].key;
+      cfg.apiKey = cfg.apiKeys.find((k) => k.enabled !== false)?.key || "";
     });
     return { ok: true, apiKeys: store.load().apiKeys };
   });
 
-  ipcMain.handle("app:set-api-key-enabled", async (_e, { id, enabled }) => {
+  handle("app:set-api-key-enabled", async (_e, { id, enabled }) => {
     store.update((cfg) => {
       const k = (cfg.apiKeys || []).find((x) => x.id === id);
       if (k) k.enabled = !!enabled;
-      cfg.apiKey = cfg.apiKeys.find((x) => x.enabled !== false)?.key || cfg.apiKey;
+      cfg.apiKey = cfg.apiKeys.find((x) => x.enabled !== false)?.key || "";
     });
     return { ok: true };
   });
 
-  ipcMain.handle("app:set-model-enabled", async (_e, { providerId, modelId, enabled }) => {
+  handle("app:set-model-enabled", async (_e, { providerId, modelId, enabled }) => {
     store.update((cfg) => {
       const p = cfg.providers.find((x) => x.id === providerId);
       if (!p) return;
@@ -768,7 +793,7 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:add-model", async (_e, { providerId, modelId }) => {
+  handle("app:add-model", async (_e, { providerId, modelId }) => {
     const mid = String(modelId || "").trim();
     if (!mid) return { ok: false, error: "Model name required" };
     const cfg = store.load();
@@ -809,7 +834,7 @@ function registerIpc() {
     return { ok: true, modelId: mid };
   });
 
-  ipcMain.handle("app:remove-model", async (_e, { providerId, modelId }) => {
+  handle("app:remove-model", async (_e, { providerId, modelId }) => {
     store.update((cfg) => {
       const p = cfg.providers.find((x) => x.id === providerId);
       if (!p || !Array.isArray(p.models)) return;
@@ -818,14 +843,17 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle("app:open-external", async (_e, url) => {
+  handle("app:open-external", async (_e, url) => {
+    if (!isAllowedExternalUrl(url)) {
+      return { ok: false, error: "That external link is not allowed." };
+    }
     await shell.openExternal(url);
     return { ok: true };
   });
 
-  ipcMain.handle("app:update-check", async () => updateService?.check() || { ok: false });
+  handle("app:update-check", async () => updateService?.check() || { ok: false });
 
-  ipcMain.handle("app:update-install", async () => {
+  handle("app:update-install", async () => {
     if (!updateService || updateService.state().status !== "ready") {
       return { ok: false, error: "No downloaded update is ready" };
     }
@@ -833,16 +861,16 @@ function registerIpc() {
     return updateService.install();
   });
 
-  ipcMain.handle("app:hide-panel", async () => {
+  handle("app:hide-panel", async () => {
     hidePanel();
     return { ok: true };
   });
 
-  ipcMain.handle("app:quit", async () => {
+  handle("app:quit", async () => {
     app.quit();
   });
 
-  ipcMain.handle("app:regenerate-key", async () => {
+  handle("app:regenerate-key", async () => {
     // Back-compat: create an additional key named Regenerated
     const key = generateApiKey();
     const entry = {
@@ -860,23 +888,6 @@ function registerIpc() {
     return { ok: true, apiKey: key };
   });
 
-  // Harness: force step without full reset
-  ipcMain.handle("harness:goto", async (_e, step) => {
-    if (step === "app" || step === "home") {
-      store.update((cfg) => {
-        cfg.onboardingComplete = true;
-        cfg.onboardingStep = "done";
-      });
-      sessionAuth.setManualUnlocked(true);
-      return { ok: true, page: "home" };
-    }
-    store.update((cfg) => {
-      cfg.onboardingComplete = false;
-      cfg.onboardingStep = step;
-    });
-    sessionAuth.setManualUnlocked(true);
-    return { ok: true, step };
-  });
 }
 
 // ─── Boot ──────────────────────────────────────────────────────────────
@@ -885,8 +896,29 @@ app.whenReady().then(async () => {
     app.dock?.hide();
   }
 
-  applyStateEnv();
-  const identityConfig = store.load();
+  let identityConfig;
+  try {
+    applyStateEnv();
+    identityConfig = store.load();
+  } catch (error) {
+    logger.error("ReRouted could not load its configuration", {
+      code: error?.code || null,
+      recoveryPath: error?.recoveryPath || null,
+    });
+    await dialog.showMessageBox({
+      type: "error",
+      title: "ReRouted could not open its configuration",
+      message: "Your existing accounts, keys, and routes were not overwritten.",
+      detail:
+        error?.message ||
+        "ReRouted could not read config.json. Restore a valid configuration or move the damaged file before reopening the app.",
+      buttons: ["Quit ReRouted"],
+      defaultId: 0,
+      noLink: true,
+    });
+    app.quit();
+    return;
+  }
   if (backfillLocalOAuthIdentities(identityConfig.providers)) store.save(identityConfig);
   if (process.platform === "darwin") {
     let active = false;
@@ -1004,3 +1036,4 @@ autoUpdater.on("before-quit-for-update", () => {
 
 // Export for tests / harness requiring main pieces
 module.exports = { store, router, gateway };
+}

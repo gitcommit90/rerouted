@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest a focused improvement to ReRouted.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the routing or application problem first, then the change you would like.
+
+        **Do not include credentials, tokens, OAuth callback data, account identifiers, email addresses, private prompts, or unreviewed logs.**
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What workflow is difficult or unavailable today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the smallest useful outcome rather than prescribing an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Relevant context
+      description: Include sanitized provider, client, or route details only when they clarify the request.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I searched existing issues for the same request.
+          required: true
+        - label: This request contains no credentials, OAuth data, account identifiers, email addresses, private prompts, or other sensitive information.
+          required: true

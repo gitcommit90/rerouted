@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { it } = require("node:test");
 const openaiCompat = require("../src/lib/providers/openai-compat");
 const {
+  MAX_ERROR_BODY_LENGTH,
   bodyHasUpstreamError,
   inspectModelTestResponse,
   runProviderModelTest,
@@ -31,15 +32,18 @@ it("preserves the full provider model-test response", async () => {
   );
 });
 
-it("rejects an HTTP-200 JSON model-test error without truncating it", async () => {
+it("rejects an HTTP-200 JSON model-test error with a bounded response", async () => {
   const tail = "JSON-TAIL-MUST-REMAIN";
-  const body = JSON.stringify({ error: { code: "bad_model", message: `${"x".repeat(600)}${tail}` } });
+  const body = JSON.stringify({
+    error: { code: "bad_model", message: `${"x".repeat(MAX_ERROR_BODY_LENGTH + 600)}${tail}` },
+  });
   const inspected = await inspectModelTestResponse(new Response(body, { status: 200 }));
 
   assert.equal(inspected.ok, false);
   assert.equal(inspected.status, 200);
-  assert.equal(inspected.body, body);
-  assert.match(inspected.body, new RegExp(tail));
+  assert.ok(inspected.body.length < body.length);
+  assert.match(inspected.body, /\[truncated \d+ chars\]/);
+  assert.doesNotMatch(inspected.body, new RegExp(tail));
 });
 
 it("rejects an HTTP-200 SSE model-test error after metadata", async () => {
@@ -78,19 +82,21 @@ it("accepts successful JSON and SSE model-test responses", async () => {
   assert.equal(bodyHasUpstreamError(sseBody), false);
 });
 
-it("preserves full non-OK model-test bodies", async () => {
-  const tail = "HTTP-TAIL-MUST-REMAIN";
-  const body = `${"z".repeat(600)}${tail}`;
+it("bounds and redacts non-OK model-test bodies", async () => {
+  const secret = "model-test-secret-token";
+  const body = `Authorization: Bearer ${secret}\n${"z".repeat(MAX_ERROR_BODY_LENGTH + 600)}`;
   const inspected = await inspectModelTestResponse(new Response(body, { status: 400 }));
 
   assert.equal(inspected.ok, false);
   assert.equal(inspected.status, 400);
-  assert.equal(inspected.body, body);
+  assert.equal(inspected.body.includes(secret), false);
+  assert.match(inspected.body, /Authorization: \[REDACTED\]/);
+  assert.match(inspected.body, /\[truncated \d+ chars\]/);
 });
 
-it("logs thrown adapter model-test failures with the full message", async () => {
-  const tail = "THROWN-TAIL-MUST-REMAIN";
-  const message = `${"q".repeat(600)}${tail}`;
+it("bounds and redacts thrown adapter model-test failures", async () => {
+  const secret = "adapter-secret-token";
+  const message = `api_key=${secret} ${"q".repeat(MAX_ERROR_BODY_LENGTH + 600)}`;
   const entries = [];
   const error = new Error(message);
   error.status = 401;
@@ -102,8 +108,11 @@ it("logs thrown adapter model-test failures with the full message", async () => 
   });
 
   assert.equal(result.ok, false);
-  assert.match(result.error, new RegExp(tail));
+  assert.equal(result.error.includes(secret), false);
+  assert.match(result.error, /\[REDACTED\]/);
+  assert.match(result.error, /\[truncated \d+ chars\]/);
   assert.equal(entries.length, 1);
   assert.equal(entries[0].meta.status, 401);
-  assert.equal(entries[0].meta.body, message);
+  assert.equal(entries[0].meta.body.includes(secret), false);
+  assert.match(entries[0].meta.body, /\[truncated \d+ chars\]/);
 });

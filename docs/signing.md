@@ -64,6 +64,8 @@ That command uses Developer ID signing when an identity is available. Without on
 The release script verifies each stage. These commands provide an independent check:
 
 ```bash
+VERSION="$(node -p 'require("./package.json").version')"
+
 codesign --verify --deep --strict --verbose=2 \
   dist/ReRouted-darwin-arm64/ReRouted.app
 
@@ -71,12 +73,12 @@ xcrun stapler validate dist/ReRouted-darwin-arm64/ReRouted.app
 spctl --assess --type execute --verbose=4 \
   dist/ReRouted-darwin-arm64/ReRouted.app
 
-xcrun stapler validate dist/ReRouted-0.3.1-arm64.dmg
+xcrun stapler validate "dist/ReRouted-${VERSION}-arm64.dmg"
 spctl --assess --type open --context context:primary-signature --verbose=4 \
-  dist/ReRouted-0.3.1-arm64.dmg
+  "dist/ReRouted-${VERSION}-arm64.dmg"
 
 UPDATE_DIR="$(mktemp -d)"
-ditto -x -k dist/ReRouted-0.3.1-mac-arm64.zip "$UPDATE_DIR"
+ditto -x -k "dist/ReRouted-${VERSION}-mac-arm64.zip" "$UPDATE_DIR"
 codesign --verify --deep --strict --verbose=2 "$UPDATE_DIR/ReRouted.app"
 xcrun stapler validate "$UPDATE_DIR/ReRouted.app"
 spctl --assess --type execute --verbose=4 "$UPDATE_DIR/ReRouted.app"

@@ -6,7 +6,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const ROOT = path.resolve(__dirname, "..", "site");
+const ROOT = path.resolve(process.env.SITE_ROOT || path.join(__dirname, "..", "site"));
 const PORT = Number(process.env.PORT || 8099);
 const HOST = process.env.HOST || "127.0.0.1";
 
@@ -40,8 +40,9 @@ const server = http.createServer((req, res) => {
     const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
     let rel = urlPath === "/" ? "/index.html" : urlPath;
     // resolve inside ROOT only — block traversal
-    const abs = path.normalize(path.join(ROOT, rel));
-    if (!abs.startsWith(ROOT)) {
+    const abs = path.resolve(ROOT, `.${rel}`);
+    const relative = path.relative(ROOT, abs);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
       res.writeHead(403).end("forbidden");
       return;
     }

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/gitcommit90/rerouted/blob/main/SECURITY.md
+    about: Read the private-reporting instructions before disclosing a vulnerability.
+  - name: Privacy information
+    url: https://github.com/gitcommit90/rerouted/blob/main/PRIVACY.md
+    about: Learn what ReRouted stores locally and how to remove its data.

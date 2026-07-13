@@ -1,0 +1,47 @@
+name: Question or support
+description: Ask a focused usage or compatibility question without exposing private data.
+title: "[Question]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Include enough sanitized context to understand the workflow.
+
+        **Do not include credentials, tokens, OAuth callback data, account identifiers, email addresses, private prompts, or unreviewed logs.**
+  - type: input
+    id: version
+    attributes:
+      label: ReRouted version
+      placeholder: "For example: 0.4.2"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: macOS version and client
+      placeholder: "macOS 15.5, client name/version"
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Describe what you are trying to accomplish and where you are unsure.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Sanitized context
+      description: Optional provider, authentication method, route, or model details that clarify the question.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I searched existing issues and documentation first.
+          required: true
+        - label: This question contains no credentials, OAuth data, account identifiers, email addresses, private prompts, or other sensitive information.
+          required: true

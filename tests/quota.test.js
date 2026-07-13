@@ -200,4 +200,46 @@ describe("quota service", () => {
     assert.equal(snapshot.accounts[0].status, "ok");
     assert.equal(snapshot.accounts[1].status, "unsupported");
   });
+
+  it("coalesces overlapping refreshes into one provider probe", async () => {
+    let releaseFetch;
+    let fetchCalls = 0;
+    const fetchGate = new Promise((resolve) => {
+      releaseFetch = resolve;
+    });
+    const service = createQuotaService({
+      store: {
+        load: () => ({
+          providers: [
+            {
+              id: "p1",
+              type: "chatgpt",
+              name: "ChatGPT",
+              accessToken: "token",
+              enabled: true,
+            },
+          ],
+        }),
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        await fetchGate;
+        return response({
+          rate_limit: {
+            primary_window: { used_percent: 10, reset_at: 2_000_000_000 },
+          },
+        });
+      },
+    });
+
+    const first = service.refresh();
+    const second = service.refresh();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fetchCalls, 1);
+
+    releaseFetch();
+    const [firstSnapshot, secondSnapshot] = await Promise.all([first, second]);
+    assert.deepEqual(secondSnapshot, firstSnapshot);
+    assert.equal(fetchCalls, 1);
+  });
 });

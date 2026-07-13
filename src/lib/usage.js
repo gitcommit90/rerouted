@@ -2,10 +2,12 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
 const { KEYED_PRESETS, OAUTH } = require("./constants");
 
-const MAX_EVENTS = 20_000;
 const RECENT_UI = 80;
+const SCHEMA_VERSION = 1;
+const LEGACY_MIGRATION_KEY = "legacy_usage_json_migrated";
 
 const PERIODS = {
   "1h": 3600_000,
@@ -88,158 +90,353 @@ function hydrateUsageIdentity(entry, providers = []) {
   };
 }
 
-/**
- * Persistent + in-memory usage store for gateway requests.
- */
-function createUsageStore(filePath) {
-  let events = [];
-  let loaded = false;
+function numeric(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
 
-  function load() {
-    if (loaded) return;
-    loaded = true;
+function normalizedRow(entry, at = Date.now()) {
+  return {
+    at,
+    model: entry?.model || null,
+    upstream: entry?.upstream || null,
+    providerId: entry?.providerId || null,
+    providerType: entry?.providerType || null,
+    providerName: entry?.providerName || null,
+    accountAlias: entry?.accountAlias || null,
+    status: numeric(entry?.status),
+    stream: !!entry?.stream,
+    prompt_tokens: numeric(entry?.prompt_tokens),
+    completion_tokens: numeric(entry?.completion_tokens),
+    cached_tokens: numeric(entry?.cached_tokens),
+    total_tokens: numeric(entry?.total_tokens),
+    error: entry?.error || null,
+  };
+}
+
+function insertValues(row, preservePayload = false) {
+  return [
+    numeric(row.at),
+    row.model ?? null,
+    row.upstream ?? null,
+    row.providerId ?? null,
+    row.providerType ?? null,
+    row.providerName ?? null,
+    row.accountAlias ?? null,
+    numeric(row.status),
+    row.stream ? 1 : 0,
+    numeric(row.prompt_tokens),
+    numeric(row.completion_tokens),
+    numeric(row.cached_tokens),
+    numeric(row.total_tokens),
+    typeof row.error === "string" || row.error == null ? row.error : JSON.stringify(row.error),
+    preservePayload ? JSON.stringify(row) : null,
+    providerAggregateKey(row),
+  ];
+}
+
+function decodeRow(row) {
+  if (!row) return row;
+  if (typeof row.payload_json === "string") {
     try {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const data = JSON.parse(raw);
-      events = Array.isArray(data.events) ? data.events : [];
+      return JSON.parse(row.payload_json);
     } catch {
-      events = [];
+      // Reconstruct from indexed columns if a payload cannot be decoded.
     }
+  }
+  return {
+    at: row.at,
+    model: row.model,
+    upstream: row.upstream,
+    providerId: row.provider_id,
+    providerType: row.provider_type,
+    providerName: row.provider_name,
+    accountAlias: row.account_alias,
+    status: row.status,
+    stream: !!row.stream,
+    prompt_tokens: row.prompt_tokens,
+    completion_tokens: row.completion_tokens,
+    cached_tokens: row.cached_tokens,
+    total_tokens: row.total_tokens,
+    error: row.error,
+  };
+}
+
+function periodWhere(periodKey) {
+  const duration = PERIODS[periodKey];
+  if (duration == null) return { sql: "", params: [] };
+  return { sql: "WHERE at >= ?", params: [Date.now() - duration] };
+}
+
+function migrateLegacyJson(db, insert, legacyPath) {
+  if (!legacyPath || !fs.existsSync(legacyPath)) return 0;
+  const migrated = db.prepare("SELECT value FROM usage_meta WHERE key = ?").get(LEGACY_MIGRATION_KEY);
+  if (migrated) return 0;
+
+  let legacy;
+  try {
+    legacy = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+  } catch (error) {
+    console.error(`usage migration failed: ${error.message}`);
+    return 0;
+  }
+  if (!Array.isArray(legacy?.events)) {
+    console.error("usage migration failed: legacy usage.json does not contain an events array");
+    return 0;
   }
 
-  function save() {
-    try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-      const tmp = `${filePath}.${process.pid}.tmp`;
-      // Keep last MAX_EVENTS
-      if (events.length > MAX_EVENTS) events = events.slice(0, MAX_EVENTS);
-      fs.writeFileSync(tmp, JSON.stringify({ version: 1, events }, null, 0), { mode: 0o600 });
-      fs.renameSync(tmp, filePath);
-      try {
-        fs.chmodSync(filePath, 0o600);
-      } catch {
-        /* ignore */
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Legacy JSON is newest-first. Reverse insertion preserves that order when
+    // timestamps are equal and SQLite uses the monotonically increasing id.
+    for (let index = legacy.events.length - 1; index >= 0; index--) {
+      const row = legacy.events[index];
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        throw new Error(`legacy usage row ${index} is not an object`);
       }
-    } catch (e) {
-      console.error("usage save failed:", e.message);
+      insert.run(...insertValues(row, true));
     }
+    db.prepare("INSERT INTO usage_meta (key, value) VALUES (?, ?)").run(
+      LEGACY_MIGRATION_KEY,
+      JSON.stringify({ rows: legacy.events.length, migratedAt: Date.now() })
+    );
+    db.exec("COMMIT");
+    return legacy.events.length;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Preserve the original migration error.
+    }
+    console.error(`usage migration failed: ${error.message}`);
+    return 0;
   }
+}
+
+function isCorruptDatabaseError(error) {
+  return /file is not a database|database disk image is malformed|malformed database schema|database corrupt/i.test(
+    error?.message || ""
+  );
+}
+
+function recoveryPathFor(databasePath) {
+  const base = `${databasePath}.recovery-${Date.now()}`;
+  let candidate = base;
+  let suffix = 1;
+  while (fs.existsSync(candidate) || fs.existsSync(`${candidate}-wal`) || fs.existsSync(`${candidate}-shm`)) {
+    candidate = `${base}-${suffix++}`;
+  }
+  return candidate;
+}
+
+function preserveCorruptDatabase(databasePath) {
+  const recoveryPath = recoveryPathFor(databasePath);
+  fs.renameSync(databasePath, recoveryPath);
+  for (const suffix of ["-wal", "-shm"]) {
+    const sidecar = `${databasePath}${suffix}`;
+    if (fs.existsSync(sidecar)) fs.renameSync(sidecar, `${recoveryPath}${suffix}`);
+  }
+  return recoveryPath;
+}
+
+function initializeDatabase(db) {
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
+    CREATE TABLE IF NOT EXISTS usage_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id INTEGER PRIMARY KEY,
+      at INTEGER NOT NULL,
+      model TEXT,
+      upstream TEXT,
+      provider_id TEXT,
+      provider_type TEXT,
+      provider_name TEXT,
+      account_alias TEXT,
+      status INTEGER NOT NULL,
+      stream INTEGER NOT NULL CHECK (stream IN (0, 1)),
+      prompt_tokens INTEGER NOT NULL,
+      completion_tokens INTEGER NOT NULL,
+      cached_tokens INTEGER NOT NULL,
+      total_tokens INTEGER NOT NULL,
+      error TEXT,
+      payload_json TEXT,
+      provider_key TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS usage_events_at_idx ON usage_events (at DESC);
+    CREATE INDEX IF NOT EXISTS usage_events_model_aggregate_idx
+      ON usage_events (model, prompt_tokens, completion_tokens, cached_tokens);
+    CREATE INDEX IF NOT EXISTS usage_events_provider_aggregate_idx
+      ON usage_events (
+        provider_key, provider_id, provider_type, provider_name, account_alias,
+        prompt_tokens, completion_tokens
+      );
+  `);
+  db.prepare("INSERT OR IGNORE INTO usage_meta (key, value) VALUES ('schema_version', ?)").run(
+    String(SCHEMA_VERSION)
+  );
+}
+
+function openDatabase(databasePath) {
+  let db;
+  try {
+    db = new DatabaseSync(databasePath);
+    initializeDatabase(db);
+    return { db, recovery: null };
+  } catch (error) {
+    try {
+      db?.close();
+    } catch {
+      // Continue with recovery using the original initialization error.
+    }
+    if (!fs.existsSync(databasePath) || !isCorruptDatabaseError(error)) throw error;
+
+    const recoveryPath = preserveCorruptDatabase(databasePath);
+    console.error(
+      `usage database was unreadable and has been preserved at ${recoveryPath}; ` +
+        "ReRouted started a fresh usage database. Keep the recovery file if historical data may be repairable."
+    );
+    const fresh = new DatabaseSync(databasePath);
+    initializeDatabase(fresh);
+    return {
+      db: fresh,
+      recovery: {
+        reason: error.message,
+        recoveryPath,
+      },
+    };
+  }
+}
+
+/**
+ * Persistent SQLite usage store for gateway requests.
+ */
+function createUsageStore(databasePath, { legacyPath } = {}) {
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+  const { db, recovery } = openDatabase(databasePath);
+  try {
+    fs.chmodSync(databasePath, 0o600);
+  } catch {
+    // The containing directory remains private if the platform rejects chmod.
+  }
+
+  const insert = db.prepare(`
+    INSERT INTO usage_events (
+      at, model, upstream, provider_id, provider_type, provider_name, account_alias,
+      status, stream, prompt_tokens, completion_tokens, cached_tokens, total_tokens,
+      error, payload_json, provider_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  migrateLegacyJson(db, insert, legacyPath);
 
   function record(entry) {
-    load();
-    const row = {
-      at: Date.now(),
-      model: entry.model || null,
-      upstream: entry.upstream || null,
-      providerId: entry.providerId || null,
-      providerType: entry.providerType || null,
-      providerName: entry.providerName || null,
-      accountAlias: entry.accountAlias || null,
-      status: entry.status || 0,
-      stream: !!entry.stream,
-      prompt_tokens: entry.prompt_tokens || 0,
-      completion_tokens: entry.completion_tokens || 0,
-      cached_tokens: entry.cached_tokens || 0,
-      total_tokens: entry.total_tokens || 0,
-      error: entry.error || null,
-    };
-    events.unshift(row);
-    if (events.length > MAX_EVENTS) events.length = MAX_EVENTS;
-    // Persist each event so recent activity survives an unexpected exit.
-    save();
+    const row = normalizedRow(entry);
+    insert.run(...insertValues(row));
     return row;
   }
 
   function recent(limit = RECENT_UI) {
-    load();
-    return events.slice(0, limit);
-  }
-
-  function inPeriod(periodKey) {
-    load();
-    const ms = PERIODS[periodKey];
-    if (ms == null) return events.slice();
-    const cutoff = Date.now() - ms;
-    return events.filter((e) => e.at >= cutoff);
+    const safeLimit = Math.max(0, Math.trunc(numeric(limit)));
+    return db
+      .prepare("SELECT * FROM usage_events ORDER BY at DESC, id DESC LIMIT ?")
+      .all(safeLimit)
+      .map(decodeRow);
   }
 
   function aggregate(periodKey = "24h") {
-    const rows = inPeriod(periodKey);
-    const byModel = new Map();
-    const byProvider = new Map();
-    let prompt = 0;
-    let completion = 0;
-    let cached = 0;
-    let total = 0;
-    let ok = 0;
-    let err = 0;
+    const period = periodWhere(periodKey);
+    const totals = db
+      .prepare(`
+        SELECT
+          COUNT(*) AS requests,
+          COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 1 ELSE 0 END), 0) AS ok,
+          COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 0 ELSE 1 END), 0) AS errors,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM usage_events ${period.sql}
+      `)
+      .get(...period.params);
 
-    for (const e of rows) {
-      prompt += e.prompt_tokens || 0;
-      completion += e.completion_tokens || 0;
-      cached += e.cached_tokens || 0;
-      total += e.total_tokens || 0;
-      if (e.status >= 200 && e.status < 400) ok++;
-      else err++;
+    const byModel = db
+      .prepare(`
+        SELECT
+          COALESCE(model, 'unknown') AS model,
+          COUNT(*) AS requests,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(cached_tokens), 0) AS cached_tokens
+        FROM usage_events ${period.sql}
+        GROUP BY COALESCE(model, 'unknown')
+        ORDER BY requests DESC, MAX(id) DESC
+      `)
+      .all(...period.params);
 
-      const mk = e.model || "unknown";
-      const m = byModel.get(mk) || {
-        model: mk,
-        requests: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        cached_tokens: 0,
-      };
-      m.requests++;
-      m.prompt_tokens += e.prompt_tokens || 0;
-      m.completion_tokens += e.completion_tokens || 0;
-      m.cached_tokens += e.cached_tokens || 0;
-      byModel.set(mk, m);
+    // SQLite resolves the bare identity columns from the row selected by the
+    // query's single MAX(id), giving each group its newest identity cheaply.
+    const byProvider = db
+      .prepare(`
+        SELECT
+          provider_key,
+          NULLIF(provider_id, '') AS providerId,
+          CASE WHEN provider_type = 'codex' THEN 'chatgpt' ELSE NULLIF(provider_type, '') END AS providerType,
+          CASE
+            WHEN provider_name IS NULL OR trim(provider_name) = ''
+              OR lower(trim(provider_name)) LIKE 'prov\\_%' ESCAPE '\\'
+            THEN NULL
+            ELSE provider_name
+          END AS providerName,
+          NULLIF(account_alias, '') AS accountAlias,
+          COUNT(*) AS requests,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          MAX(id) AS newest_id
+        FROM usage_events ${period.sql}
+        GROUP BY provider_key
+        ORDER BY requests DESC, newest_id DESC
+      `)
+      .all(...period.params)
+      .map(({ provider_key: _providerKey, newest_id: _newestId, ...entry }) => ({
+        provider: providerAggregateLabel(entry),
+        ...entry,
+      }));
 
-      const pk = providerAggregateKey(e);
-      const p = byProvider.get(pk) || {
-        provider: providerAggregateLabel(e),
-        providerId: e.providerId || null,
-        providerType: canonicalProviderType(e.providerType) || null,
-        providerName: isInternalProviderName(e.providerName) ? null : e.providerName,
-        accountAlias: e.accountAlias || null,
-        requests: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-      };
-      if (!p.providerType && e.providerType) p.providerType = canonicalProviderType(e.providerType);
-      if (!p.providerName && !isInternalProviderName(e.providerName)) p.providerName = e.providerName;
-      if (!p.accountAlias && e.accountAlias) p.accountAlias = e.accountAlias;
-      p.provider = providerAggregateLabel(p);
-      p.requests++;
-      p.prompt_tokens += e.prompt_tokens || 0;
-      p.completion_tokens += e.completion_tokens || 0;
-      byProvider.set(pk, p);
-    }
+    const recentRows = db
+      .prepare(`SELECT * FROM usage_events ${period.sql} ORDER BY at DESC, id DESC LIMIT ?`)
+      .all(...period.params, RECENT_UI)
+      .map(decodeRow);
 
     return {
       period: periodKey,
-      requests: rows.length,
-      ok,
-      errors: err,
-      prompt_tokens: prompt,
-      completion_tokens: completion,
-      cached_tokens: cached,
-      total_tokens: total,
-      byModel: [...byModel.values()].sort((a, b) => b.requests - a.requests),
-      byProvider: [...byProvider.values()].sort((a, b) => b.requests - a.requests),
-      recent: rows.slice(0, RECENT_UI),
+      requests: totals.requests,
+      ok: totals.ok,
+      errors: totals.errors,
+      prompt_tokens: totals.prompt_tokens,
+      completion_tokens: totals.completion_tokens,
+      cached_tokens: totals.cached_tokens,
+      total_tokens: totals.total_tokens,
+      byModel,
+      byProvider,
+      recent: recentRows,
     };
   }
 
   function totalsAllTime() {
-    load();
     return {
-      allTimeRequests: events.length,
+      allTimeRequests: db.prepare("SELECT COUNT(*) AS count FROM usage_events").get().count,
     };
   }
 
-  return { record, recent, aggregate, extractUsage, totalsAllTime, PERIODS };
+  function close() {
+    db.close();
+  }
+
+  return { record, recent, aggregate, extractUsage, totalsAllTime, close, recovery, PERIODS };
 }
 
 module.exports = {

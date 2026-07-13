@@ -10,7 +10,9 @@
     <a href="https://rerouted.dev">Website</a> |
     <a href="https://github.com/gitcommit90/rerouted/releases/latest">Download</a> |
     <a href="#quick-start">Quick start</a> |
-    <a href="./docs/architecture.md">Architecture</a>
+    <a href="./docs/architecture.md">Architecture</a> |
+    <a href="./SECURITY.md">Security</a> |
+    <a href="./PRIVACY.md">Privacy</a>
   </p>
   <p>
     <a href="https://github.com/gitcommit90/rerouted/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/gitcommit90/rerouted?color=ef5b2a&label=release" /></a>
@@ -91,11 +93,15 @@ OAuth accounts and keyed providers can live in the same route. ReRouted handles 
 
 ReRouted is an independent project and is not affiliated with or endorsed by any upstream provider.
 
+> **OAuth notice:** This provider's subscription or OAuth session is not officially licensed for proxy or router use. Using it this way may result in account restrictions or bans. Proceed at your own risk. Provider behavior and policies can change without notice; API-key integrations are the more stable choice where available.
+
 ## Quick start
 
 ### 1. Install
 
-[Download ReRouted 0.4.1 for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/download/v0.4.1/ReRouted-0.4.1-arm64.dmg), open the DMG, and drag ReRouted to Applications.
+[Download ReRouted 0.4.2 for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/download/v0.4.2/ReRouted-0.4.2-arm64.dmg), open the DMG, and drag ReRouted to Applications.
+
+ReRouted requires Apple Silicon and macOS 12 Monterey or newer.
 
 The macOS release is Developer ID signed, notarized by Apple, and stapled for a normal Gatekeeper launch.
 
@@ -155,15 +161,26 @@ Requests require a generated bearer key except for `/` and `/health`. OpenAI-sty
 
 - The gateway binds to `127.0.0.1` by default.
 - Configuration, credentials, request metadata, usage, and logs are stored locally.
+- Usage history is stored in an uncapped local SQLite database so all-time statistics do not silently discard older requests.
 - Prompt bodies are not intentionally persisted.
 - Local config and usage files are written with restrictive permissions where supported.
 - Provider credentials are not encrypted at rest.
 - Requests and the credentials needed to authorize them are sent to the upstream services you choose.
 - Enabling network access binds the gateway to `0.0.0.0`; only do that on a network you trust.
 
+See [Privacy](./PRIVACY.md) for the local files ReRouted keeps, the network services it contacts, and how to remove its data.
+
+## Support, security, and project status
+
+- For questions, reproducible bugs, and feature requests, use [GitHub Issues](https://github.com/gitcommit90/rerouted/issues).
+- For a suspected vulnerability, follow [the security policy](./SECURITY.md) and do not post credentials or sensitive details in a public issue.
+- Before sharing diagnostics, remove API keys, gateway keys, OAuth callback URLs or codes, account identifiers, email addresses, and any provider response that may contain private data.
+
+ReRouted's source is public for review and local builds, but no software license has been selected yet. The repository is therefore source-visible, not offered as open source. External code contributions are not currently accepted while licensing is finalized; focused issues and sanitized reproduction reports are welcome. See [Contributing](./CONTRIBUTING.md) for the current policy.
+
 ## Build from source
 
-Requires Node.js 22.12 or newer. Packaging requires macOS and produces an Apple Silicon DMG.
+Requires Node.js 22.13 or newer. Packaging requires macOS and produces an Apple Silicon DMG.
 
 ```bash
 git clone https://github.com/gitcommit90/rerouted.git
@@ -181,13 +198,11 @@ npm run package:dmg
 
 The implementation is intentionally small: Electron, Node's built-in HTTP server, and a vanilla HTML/CSS/JavaScript renderer. See [the architecture document](./docs/architecture.md) for the runtime, routing, persistence, and packaging details.
 
-Questions and bug reports are welcome in [GitHub Issues](https://github.com/gitcommit90/rerouted/issues).
-
 ## Current release
 
-ReRouted `0.4.1` ships for Apple Silicon macOS with masked OAuth account identities, image inputs in chat completions, a Developer ID signature, stapled Apple notarization tickets, and in-app updates backed by stable GitHub Releases. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
+ReRouted `0.4.2` ships for Apple Silicon macOS with hardened OAuth callbacks and renderer lock boundaries, uncapped SQLite usage history, 60-second quota refreshes while the Quota page is open, masked account identities, and image inputs in chat completions. Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
 
-ReRouted is released by [Public Bytes](https://publicbytes.org), a nonprofit building practical technology for public good.
+ReRouted is an independent personal project.
 
 ## Thanks
 

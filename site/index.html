@@ -16,7 +16,7 @@
 <meta property="og:title" content="ReRouted - one local endpoint for your AI tools" />
 <meta property="og:description" content="One local endpoint for every connected account, model, and fallback route." />
 <meta property="og:url" content="https://rerouted.dev/" />
-<meta property="og:image" content="https://rerouted.dev/social-card.png" />
+<meta property="og:image" content="https://rerouted.dev/social-card.png?v=launch" />
 <meta property="og:image:type" content="image/png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
@@ -24,7 +24,7 @@
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="ReRouted - one local endpoint for your AI tools" />
 <meta name="twitter:description" content="One local endpoint for every connected account, model, and fallback route." />
-<meta name="twitter:image" content="https://rerouted.dev/social-card.png" />
+<meta name="twitter:image" content="https://rerouted.dev/social-card.png?v=launch" />
 <meta name="twitter:image:alt" content="ReRouted routing a local chat-completions request through a named fallback route." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -690,7 +690,7 @@
   .foot-inner { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
   .foot-copy { font-size: 13.5px; color: var(--muted); }
   .foot-copy b { color: var(--ink-soft); font-weight: 600; }
-  .foot-links { display: flex; gap: 24px; font-size: 13.5px; color: var(--muted); }
+  .foot-links { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13.5px; color: var(--muted); }
   .foot-links a:hover { color: var(--route-dark); }
   .foot-mono { font-family: var(--mono); font-size: 12px; color: var(--faint); }
 
@@ -741,7 +741,7 @@
       <span class="eyebrow">Local gateway · macOS menu bar</span>
       <h1 class="headline">One endpoint.<br />Your run <span class="em">keeps&nbsp;going</span>.</h1>
       <p class="subhead">
-        Point any configurable chat-completions client at <b>one local URL</b>.
+        Point a compatible configurable chat-completions client at <b>one local URL</b>.
         When a provider rate-limits, times out, or fails before output begins, ReRouted moves to the next route member —
         <b>your endpoint and route stay the same</b>.
       </p>
@@ -907,7 +907,10 @@
       <div class="provider reveal"><div class="p-name">GLM Coding</div><div class="p-path">API key</div><span class="p-tag key">api key</span></div>
     </div>
     <p class="reveal" style="text-align:center;margin-top:22px;font-size:14.5px;color:var(--muted);">
-      …plus any custom OpenAI-compatible service — just a base URL and a key.
+      …plus custom upstreams that expose the supported OpenAI-style chat-completions shape.
+    </p>
+    <p class="reveal" style="max-width:760px;margin:16px auto 0;text-align:center;font-size:12px;line-height:1.55;color:var(--muted);">
+      Notice: This provider's subscription or OAuth session is not officially licensed for proxy or router use. Using it this way may result in account restrictions or bans. Proceed at your own risk. ReRouted is independent and is not affiliated with or endorsed by upstream providers.
     </p>
   </div>
 </section>
@@ -966,15 +969,15 @@
 <footer class="foot">
   <div class="wrap foot-inner">
     <div class="foot-copy">
-      <b>ReRouted</b> — a local OpenAI-compatible LLM gateway.<br />
-      <span class="foot-mono">v0.3.1 · Apple Silicon · Developer ID signed · Apple notarized · In-app updates</span><br />
-      <span class="foot-mono">Released by <a href="https://publicbytes.org">Public Bytes</a>, a nonprofit building practical technology for public good.</span>
+      <b>ReRouted</b> — a local OpenAI-style chat-completions gateway.<br />
+      <span class="foot-mono">Current stable release · macOS 12+ · Apple Silicon · Developer ID signed · Apple notarized</span><br />
+      <span class="foot-mono">An independent personal project.</span>
     </div>
     <div class="foot-links">
-      <a href="https://rerouted.dev">ReRouted.dev</a>
-      <a href="#how">How it works</a>
-      <a href="#connect">Providers</a>
-      <a href="#setup">Setup</a>
+      <a href="https://github.com/gitcommit90/rerouted">GitHub</a>
+      <a href="https://github.com/gitcommit90/rerouted/issues">Support</a>
+      <a href="https://github.com/gitcommit90/rerouted/blob/main/PRIVACY.md">Privacy</a>
+      <a href="https://github.com/gitcommit90/rerouted/blob/main/SECURITY.md">Security</a>
     </div>
   </div>
 </footer>

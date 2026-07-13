@@ -12,6 +12,16 @@ const COMBO_NAME_MIGRATION_VERSION = 5;
 const XAI_LOCK_RESET_VERSION = 6;
 const OAUTH_ALIAS_RE = /^oauth([1-9]\d*)$/;
 
+class ConfigLoadError extends Error {
+  constructor(message, { cause, filePath, recoveryPath } = {}) {
+    super(message, { cause });
+    this.name = "ConfigLoadError";
+    this.code = "CONFIG_LOAD_FAILED";
+    this.filePath = filePath;
+    this.recoveryPath = recoveryPath || null;
+  }
+}
+
 function canonicalProviderType(type) {
   return type === "codex" ? "chatgpt" : type;
 }
@@ -158,8 +168,8 @@ function migrate(cfg) {
     ];
     cfg.apiKey = k;
   } else {
-    const primary = cfg.apiKeys.find((k) => k.enabled !== false) || cfg.apiKeys[0];
-    if (primary) cfg.apiKey = primary.key;
+    const primary = cfg.apiKeys.find((k) => k.enabled !== false);
+    cfg.apiKey = primary?.key || "";
   }
   if (!cfg.bindHost) cfg.bindHost = "127.0.0.1";
   if (!cfg.providerAliasCounters || typeof cfg.providerAliasCounters !== "object") {
@@ -207,18 +217,62 @@ function createStore(filePath) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   }
 
+  function preserveUnreadableConfig() {
+    const recoveryPath = `${filePath}.recovery-${Date.now()}-${process.pid}`;
+    try {
+      fs.copyFileSync(filePath, recoveryPath, fs.constants.COPYFILE_EXCL);
+      try {
+        fs.chmodSync(recoveryPath, 0o600);
+      } catch {
+        /* best effort; the original config is still untouched */
+      }
+      return recoveryPath;
+    } catch {
+      return null;
+    }
+  }
+
+  function configLoadError(error, detail) {
+    const recoveryPath = preserveUnreadableConfig();
+    const recoveryDetail = recoveryPath
+      ? ` A recovery copy was saved at ${recoveryPath}.`
+      : " The original file was left untouched, but a recovery copy could not be created.";
+    return new ConfigLoadError(
+      `ReRouted could not load its existing configuration at ${filePath}: ${detail}.${recoveryDetail}`,
+      { cause: error, filePath, recoveryPath }
+    );
+  }
+
   function load() {
     if (cache) return cache;
+    let raw;
     try {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      const before = JSON.stringify(parsed);
-      cache = migrate(parsed);
-      if (JSON.stringify(cache) !== before) save(cache);
-    } catch {
+      raw = fs.readFileSync(filePath, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw configLoadError(error, error?.message || "the file could not be read");
+      }
       cache = defaultConfig();
       save(cache);
+      return cache;
     }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw configLoadError(error, "the file is not valid JSON");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw configLoadError(
+        new TypeError("Configuration root must be a JSON object"),
+        "the JSON root must be an object"
+      );
+    }
+
+    const before = JSON.stringify(parsed);
+    cache = migrate(parsed);
+    if (JSON.stringify(cache) !== before) save(cache);
     return cache;
   }
 
@@ -226,7 +280,7 @@ function createStore(filePath) {
     ensureDir();
     const next = migrate(cfg || cache || defaultConfig());
     const primary = (next.apiKeys || []).find((k) => k.enabled !== false);
-    if (primary) next.apiKey = primary.key;
+    next.apiKey = primary?.key || "";
     cache = next;
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600 });
@@ -266,6 +320,7 @@ function createStore(filePath) {
 }
 
 module.exports = {
+  ConfigLoadError,
   createStore,
   defaultConfig,
   migrate,

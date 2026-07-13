@@ -3,6 +3,7 @@
 const api = window.rerouted;
 const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
   window.ReroutedAccountIdentity;
+const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const nav = $("#nav");
@@ -13,6 +14,7 @@ let page = "home";
 let toastTimer = null;
 let armDelete = null;
 let activeProviderPanel = null;
+const stateRequestGate = createLatestRequestGate();
 
 function reducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
@@ -68,7 +70,9 @@ function toast(msg) {
 }
 
 async function refresh() {
-  state = await api.invoke("app:get-state");
+  const isLatest = stateRequestGate.begin();
+  const nextState = await api.invoke("app:get-state");
+  if (isLatest()) state = nextState;
   return state;
 }
 
@@ -222,7 +226,13 @@ function wireSecrets(root = view) {
   });
 }
 
-const PASTE_CODE_PLACEHOLDER = "Paste code if prompted";
+const PASTE_CODE_PLACEHOLDER = "Paste the full callback URL if prompted";
+const OAUTH_RISK_NOTICE =
+  "Notice: This provider's subscription or OAuth session is not officially licensed for proxy or router use. Using it this way may result in account restrictions or bans. Proceed at your own risk.";
+
+function oauthRiskNotice() {
+  return `<div class="risk-note">${esc(OAUTH_RISK_NOTICE)}</div>`;
+}
 
 function stepProgress(step) {
   const steps = state.steps || [];
@@ -265,7 +275,7 @@ function renderAdminPassword() {
   view.innerHTML = `
     ${stepProgress("admin-password")}
     <h1 class="h1">Create admin password</h1>
-    <p class="lead">This password protects the settings panel on this Mac. It is stored as a scrypt hash — never sent anywhere.</p>
+    <p class="lead">Your active macOS login unlocks ReRouted. This password is the fallback when the app cannot confirm that session. It is stored as a scrypt hash — never sent anywhere.</p>
     <input class="input" id="pw1" type="password" placeholder="Password" autocomplete="new-password" />
     <input class="input" id="pw2" type="password" placeholder="Confirm password" autocomplete="new-password" />
     <div class="btn-row">
@@ -286,7 +296,7 @@ function renderWelcome() {
   view.innerHTML = `
     ${stepProgress("welcome")}
     <div class="eyebrow">Your local wayfinder</div>
-    <h1 class="h1">Every model.<br />One clean route.</h1>
+    <h1 class="h1">Your models.<br />One clean route.</h1>
     <p class="lead">Connect subscriptions and API keys once. ReRouted presents a single local endpoint and moves traffic when an account runs out.</p>
     <section class="hero-surface">
       <div class="gateway-state"><span class="status-node"></span>Runs on this Mac</div>
@@ -358,6 +368,7 @@ function renderOauthProviders() {
     ${stepProgress("oauth-providers")}
     <h1 class="h1">Connect OAuth providers</h1>
     <p class="lead">Click a provider to sign in with your browser. Multiple accounts per provider are supported — connect again to add another.</p>
+    ${oauthRiskNotice()}
     <div class="provider-grid">
       ${list
         .map(
@@ -376,10 +387,11 @@ function renderOauthProviders() {
       const type = btn.dataset.type;
       const panel = $("#oauth-panel");
       panel.innerHTML = `<div class="card"><div class="card-title">Signing in to ${esc(type)}…</div>
-        <div class="card-sub">Complete login in your browser, then click I'm done.</div>
+        <div class="card-sub">Complete login in your browser, then click Finish connection.</div>
+        ${oauthRiskNotice()}
         <div class="btn-row" style="margin-top:10px">
           <button type="button" class="btn btn-secondary btn-sm" id="btn-reopen">Open browser again</button>
-          <button type="button" class="btn btn-primary btn-sm" id="btn-done">I'm done</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-done">Finish connection</button>
         </div>
         <input class="input" id="paste-code" placeholder="${PASTE_CODE_PLACEHOLDER}" style="margin-top:10px" />
       </div>`;
@@ -586,7 +598,7 @@ function renderApiKeys() {
   view.innerHTML = `
     ${stepProgress("api-keys")}
     <h1 class="h1">Add an API key</h1>
-    <p class="lead">Optional. Quick-add a known OpenAI-compatible provider, or enter a custom base URL. Custom providers must pass Fetch models before Add.</p>
+    <p class="lead">Optional. Quick-add a known chat-completions provider, or enter a custom base URL. Custom providers must pass Fetch models before Add.</p>
     ${keyedProviderPickerHtml(presets)}
     <div class="btn-row">
       <button type="button" class="btn btn-secondary" id="btn-skip">Skip</button>
@@ -621,7 +633,7 @@ let tutorialPage = 0;
 const TUTORIAL = [
   {
     t: "What is ReRouted?",
-    b: "A local gateway. Your editors and agents send OpenAI-style chat completions to localhost; ReRouted talks to ChatGPT, Claude, Antigravity, xAI, and OpenAI-compatible APIs behind the scenes.",
+    b: "A local gateway. Your editors and agents send OpenAI-style chat completions to localhost; ReRouted talks to ChatGPT, Claude, Antigravity, xAI, and supported keyed APIs behind the scenes.",
   },
   {
     t: "What are routes?",
@@ -775,6 +787,10 @@ function renderLock() {
   };
 }
 
+function blockSensitiveRenderIfLocked() {
+  return guardSensitiveRender(state, render);
+}
+
 function fmtTime(at) {
   if (!at) return "";
   try {
@@ -888,6 +904,7 @@ function restartHomeRouteAnimation() {
 }
 
 function renderHome() {
+  if (blockSensitiveRenderIfLocked()) return;
   const { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate } = homeValues();
   homeLastRequestKey = homeRequestKey(last);
   view.innerHTML = `
@@ -926,6 +943,7 @@ function renderHome() {
 }
 
 function updateHome() {
+  if (blockSensitiveRenderIfLocked()) return;
   const root = view.querySelector("[data-home-root]");
   if (!root) return renderHome();
   const { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate } = homeValues();
@@ -970,8 +988,9 @@ function startOauthFlow({ type, providerId, onDone, opener }) {
   const claudeHint =
     type === "claude"
       ? "After authorizing, paste the full localhost callback URL if the browser cannot return automatically."
-      : "Most providers return automatically. Paste a code only if the provider shows one.";
+      : "Most providers return automatically. Paste the full callback URL only if automatic return fails.";
   box.innerHTML = `<div class="action-panel-head"><div class="eyebrow">${providerId ? "Reconnect" : "New account"}</div><div class="action-panel-title" id="oauth-panel-title" data-panel-heading tabindex="-1">${esc(providerLabel(type))}</div><div class="action-panel-sub">Opening a secure browser session. ${esc(claudeHint)}</div></div>
+    ${oauthRiskNotice()}
     <div class="gateway-state"><span class="status-node"></span><span id="oauth-status-line">Starting OAuth…</span></div>
     <details class="disclosure" style="margin:10px 0 0">
       <summary>Having trouble?</summary>
@@ -1073,6 +1092,7 @@ function startOauthFlow({ type, providerId, onDone, opener }) {
 }
 
 function renderProviders() {
+  if (blockSensitiveRenderIfLocked()) return;
   disposeProviderPanel({ clear: false });
   const list = state.providers || [];
   view.innerHTML = `
@@ -1268,7 +1288,8 @@ function renderProviders() {
     const listO = state.oauthProviders || [];
     panel.innerHTML = `
       <div class="action-panel" role="region" aria-labelledby="connect-panel-title">
-        <div class="action-panel-head"><div class="eyebrow">New source</div><div class="action-panel-title" id="connect-panel-title" data-panel-heading tabindex="-1">Connect an account</div><div class="action-panel-sub">Use a subscription login or bring an OpenAI-compatible API key.</div></div>
+        <div class="action-panel-head"><div class="eyebrow">New source</div><div class="action-panel-title" id="connect-panel-title" data-panel-heading tabindex="-1">Connect an account</div><div class="action-panel-sub">Use a subscription login or bring an API key for a supported chat-completions provider.</div></div>
+        ${oauthRiskNotice()}
         <div class="provider-grid">
         ${listO.map((p) => `<button type="button" class="tile" data-type="${esc(p.id)}">${esc(p.name)}</button>`).join("")}
         </div>
@@ -1297,7 +1318,7 @@ function renderProviders() {
       disposeProviderPanel({ clear: true });
       panel.innerHTML = `
         <div class="action-panel" role="region" aria-labelledby="key-panel-title">
-          <div class="action-panel-head"><div class="eyebrow">API source</div><div class="action-panel-title" id="key-panel-title" data-panel-heading tabindex="-1">Connect an API key</div><div class="action-panel-sub">Choose a preset or bring any OpenAI-compatible endpoint. ReRouted tests it before adding its models.</div></div>
+          <div class="action-panel-head"><div class="eyebrow">API source</div><div class="action-panel-title" id="key-panel-title" data-panel-heading tabindex="-1">Connect an API key</div><div class="action-panel-sub">Choose a preset or bring an endpoint that exposes the supported chat-completions shape. ReRouted tests it before adding its models.</div></div>
           ${keyedProviderPickerHtml(presets)}
           <button type="button" class="btn btn-ghost panel-cancel" data-panel-cancel>Cancel</button>
         </div>`;
@@ -1345,6 +1366,7 @@ function comboMemberInfo(member, models) {
 }
 
 function renderCombos() {
+  if (blockSensitiveRenderIfLocked()) return;
   const combos = state.combos || [];
   const models = flatModels();
   const editor = comboDraft;
@@ -1507,14 +1529,20 @@ let statsPeriod = "24h";
 let statsRenderRequest = 0;
 let logsRenderRequest = 0;
 let pollTimer = null;
+let quotaRefreshTimer = null;
 let quotaState = null;
 let quotaLoading = false;
 let quotaInitialized = false;
+const QUOTA_REFRESH_INTERVAL_MS = 60_000;
 
 function stopPoll() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+  if (quotaRefreshTimer) {
+    clearInterval(quotaRefreshTimer);
+    quotaRefreshTimer = null;
   }
 }
 
@@ -1614,19 +1642,30 @@ async function refreshQuota() {
 }
 
 async function initializeQuota() {
-  if (quotaInitialized) return;
-  quotaInitialized = true;
-  try {
-    const r = await api.invoke("app:quota-get");
-    if (r?.ok) quotaState = r.quota;
-  } catch {
-    /* the refresh path below will surface provider-specific errors */
+  if (!quotaInitialized) {
+    quotaInitialized = true;
+    try {
+      const r = await api.invoke("app:quota-get");
+      if (r?.ok) quotaState = r.quota;
+    } catch {
+      /* the refresh path below will surface provider-specific errors */
+    }
   }
   if (page === "quota") renderQuota();
-  if (!quotaState?.refreshedAt) await refreshQuota();
+  if (!quotaState?.refreshedAt || Date.now() - quotaState.refreshedAt >= QUOTA_REFRESH_INTERVAL_MS) {
+    await refreshQuota();
+  }
+}
+
+function startQuotaRefreshPoll() {
+  if (quotaRefreshTimer) clearInterval(quotaRefreshTimer);
+  quotaRefreshTimer = setInterval(() => {
+    if (page === "quota") refreshQuota();
+  }, QUOTA_REFRESH_INTERVAL_MS);
 }
 
 function renderQuota() {
+  if (blockSensitiveRenderIfLocked()) return;
   const accounts = quotaState?.accounts || [];
   view.innerHTML = `
     ${pageHeader("Capacity", "Accounts", "See the remaining subscription capacity and reset time for every connected account.", `<button type="button" class="btn btn-secondary btn-sm" id="btn-quota-refresh" ${quotaLoading ? "disabled" : ""}>${quotaLoading ? "Refreshing…" : "Refresh"}</button>`)}
@@ -1644,6 +1683,7 @@ function renderQuota() {
 }
 
 async function renderStats() {
+  if (blockSensitiveRenderIfLocked()) return;
   const requestId = ++statsRenderRequest;
   const period = statsPeriod || "24h";
   let usage = state.usage;
@@ -1656,7 +1696,11 @@ async function renderStats() {
   } catch {
     /* keep cached */
   }
-  if (page !== "stats" || requestId !== statsRenderRequest) return;
+  if (
+    page !== "stats" ||
+    requestId !== statsRenderRequest ||
+    blockSensitiveRenderIfLocked()
+  ) return;
   usage = usage || {
     requests: 0,
     prompt_tokens: 0,
@@ -1764,6 +1808,7 @@ async function renderStats() {
 }
 
 async function renderLogs() {
+  if (blockSensitiveRenderIfLocked()) return;
   const requestId = ++logsRenderRequest;
   let r;
   try {
@@ -1774,7 +1819,11 @@ async function renderLogs() {
     }
     return;
   }
-  if (page !== "logs" || requestId !== logsRenderRequest) return;
+  if (
+    page !== "logs" ||
+    requestId !== logsRenderRequest ||
+    blockSensitiveRenderIfLocked()
+  ) return;
   const entries = r?.entries || [];
   const file = r?.file || "";
   view.innerHTML = `
@@ -1820,6 +1869,7 @@ async function renderLogs() {
 }
 
 function renderSettings() {
+  if (blockSensitiveRenderIfLocked()) return;
   const keys = state.apiKeys || [];
   const bindAll = state.bindHost === "0.0.0.0";
   const update = state.update || { status: "idle", currentVersion: state.appVersion };
@@ -1866,7 +1916,7 @@ function renderSettings() {
     ${sectionHeader("Gateway", state.serverListening ? "Online" : "Offline")}
     <section class="settings-group">
       <div class="settings-row">
-        <div class="settings-copy"><div class="row-title">Serve the gateway</div><div class="row-sub">Accept OpenAI-compatible requests on <span class="mono">/v1</span>.</div></div>
+        <div class="settings-copy"><div class="row-title">Serve the gateway</div><div class="row-sub">Accept supported chat-completions requests on <span class="mono">/v1</span>.</div></div>
         <label class="toggle"><input type="checkbox" id="tog-srv" ${state.serverEnabled ? "checked" : ""} /><span></span></label>
       </div>
       <div class="settings-row">
@@ -1909,7 +1959,7 @@ function renderSettings() {
       <div class="settings-row update-row"><div class="settings-copy"><div class="row-title">Software updates</div><div class="row-sub">${esc(updateUi.copy)}</div></div><button type="button" class="btn ${updateUi.primary ? "btn-primary" : "btn-secondary"} btn-sm" id="btn-update" ${updateUi.disabled ? "disabled" : ""}>${esc(updateUi.label)}</button></div>
       <div class="settings-row"><div class="settings-copy"><div class="row-title">Quit ReRouted</div><div class="row-sub">Stops the menu bar app and local gateway.</div></div><button type="button" class="btn btn-danger btn-sm" id="btn-quit">Quit</button></div>
     </section>
-    <div class="publisher-note"><button type="button" id="btn-product-site">ReRouted.dev</button> &middot; Released by <button type="button" id="btn-public-bytes">Public Bytes</button>.</div>
+    <div class="publisher-note"><button type="button" id="btn-product-site">ReRouted.dev</button> &middot; Independent personal project.</div>
   `;
   wireSecrets();
   $("#copy-settings-url").onclick = () => copy(state.endpoint);
@@ -1966,13 +2016,11 @@ function renderSettings() {
     );
     if (result?.update) state.update = result.update;
     if (!result?.ok && result?.error) toast(result.error);
-    if (page === "settings") renderSettings();
+    if (page === "settings") render();
   };
   $("#btn-quit").onclick = () => api.invoke("app:quit");
   $("#btn-product-site").onclick = () =>
     api.invoke("app:open-external", "https://rerouted.dev");
-  $("#btn-public-bytes").onclick = () =>
-    api.invoke("app:open-external", "https://publicbytes.org");
 }
 
 function render() {
@@ -2026,6 +2074,7 @@ function render() {
     renderQuota();
     initializeQuota();
     startPoll(updateQuotaCountdowns, 1000);
+    startQuotaRefreshPoll();
   }
   else if (page === "stats") {
     renderStats();
@@ -2052,7 +2101,11 @@ nav.querySelectorAll(".nav-btn").forEach((btn) => {
 
 $("#btn-close").onclick = () => api.invoke("app:hide-panel");
 
-api.on("app:session-lock-changed", async () => {
+api.on("app:session-lock-changed", async (session) => {
+  if (state && session?.unlocked === false) {
+    state.unlocked = false;
+    render();
+  }
   await refresh();
   render();
 });
@@ -2060,7 +2113,7 @@ api.on("app:session-lock-changed", async () => {
 api.on("app:update-state", (update) => {
   if (!state) return;
   state.update = update;
-  if (page === "settings") renderSettings();
+  if (page === "settings") render();
 });
 
 api.on("app:provider-identities-updated", async () => {

@@ -13,7 +13,7 @@ ReRouted is one Electron process with three jobs:
 There is no separate daemon. Closing or hiding the panel does not stop the gateway; quitting ReRouted does.
 
 ```text
-OpenAI-compatible client
+OpenAI-style chat-completions client
         |
         | Bearer rr-... + /v1/chat/completions
         v
@@ -29,14 +29,14 @@ src/lib/providers/*  --->  upstream provider API
         |
         | normalize response/SSE
         v
-OpenAI-compatible response
+OpenAI-style chat-completions response
 ```
 
 ## Main process and panel
 
 `src/main.js` owns the single-instance lock, tray, frameless panel window, login-item preference, IPC handlers, store, usage store, router, and gateway lifecycle.
 
-The panel is a local file loaded from `src/renderer/index.html`. `src/preload.js` exposes an IPC bridge to `src/renderer/app.js`; context isolation is enabled and renderer Node integration is disabled. The BrowserWindow sandbox is currently disabled.
+The panel is a local file loaded from `src/renderer/index.html`. `src/preload.js` exposes an allowlisted IPC bridge to `src/renderer/app.js`; context isolation and the renderer sandbox are enabled, and renderer Node integration is disabled.
 
 The renderer is vanilla HTML, CSS, and JavaScript. It renders onboarding and the Status, Accounts, Routes, Activity, and Settings pages from state returned by the main process.
 
@@ -52,6 +52,8 @@ The renderer is vanilla HTML, CSS, and JavaScript. It renders onboarding and the
 | `POST /v1/chat/completions` | Bearer key | Streaming or non-streaming routed completion |
 
 The default bind is `127.0.0.1:4949`. Settings can switch the host to `0.0.0.0` for LAN or Tailscale access. CORS is currently `*`, so the bearer key is the gateway's access boundary when network binding is enabled.
+
+JSON request bodies are limited to 32 MiB. Oversized requests receive a JSON `413` response before routing begins.
 
 ## Model IDs and routes
 
@@ -102,12 +104,14 @@ Electron's `userData` directory contains:
 | File | Contents |
 | --- | --- |
 | `config.json` | Providers, credentials, models, routes, gateway keys, bind settings, onboarding state, admin password hash |
-| `usage.json` | Up to 20,000 recent request metadata rows and token counts |
+| `usage.sqlite` | Uncapped local request metadata and token counts, indexed by timestamp for period and all-time statistics |
 | `rerouted.log` | Gateway, OAuth, and operational diagnostics |
 
 The Quota page probes subscription windows directly for ChatGPT/Codex, Claude, and Antigravity. Probe failures remain isolated per account and do not disable chat routing.
 
-Config and usage writes use a temporary file followed by rename. The files are written with mode `0600`; parent directories are created with mode `0700` where supported.
+Config writes use a temporary file followed by rename. Usage inserts use SQLite WAL mode with prepared statements. The primary files are written with mode `0600`; parent directories are created with mode `0700` where supported.
+
+On the first `0.4.2` launch, every row still present in the legacy `usage.json` file is imported transactionally into `usage.sqlite`. The legacy file remains as a migration backup, and a database marker prevents duplicate imports. New history is not automatically pruned.
 
 The admin password is scrypt-hashed. Provider credentials and gateway keys are not encrypted at rest.
 
@@ -136,13 +140,13 @@ Packaged builds use Electron's native macOS updater and the public stable GitHub
 
 ## Tests and current gaps
 
-`tests/gateway.test.js` covers password hashing, config persistence, bearer auth, model listing, streaming and non-streaming completion paths, fallback, round-robin ordering, timeouts, OAuth request behavior, token refresh, format translation, SSE decoding, multiple gateway keys, disabled models, and usage aggregation.
+`tests/gateway.test.js` covers password hashing, config persistence, bearer auth, request-size enforcement, model listing, streaming and non-streaming completion paths, fallback, round-robin ordering, timeouts, OAuth request behavior, token refresh, format translation, SSE decoding, multiple gateway keys, disabled models, and usage aggregation.
 
 Important gaps to keep visible:
 
 - No automated renderer or end-to-end Electron tests.
-- No macOS packaging test in CI.
-- No request-body size limit or gateway rate limit.
+- The Node test suite runs in GitHub Actions, but there is no macOS packaging test in CI.
+- No gateway request-rate limit.
 - No automated release publication or CI-hosted signing/notarization.
 - No commit SHA embedded in the app bundle.
 - No compatibility matrix for third-party OpenAI clients.
