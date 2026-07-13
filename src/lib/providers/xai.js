@@ -2,7 +2,9 @@
 
 const crypto = require("node:crypto");
 const { OAUTH } = require("../constants");
+const { identityFromTokens } = require("../oauth-identity");
 const { extractEffort } = require("./effort");
+const { textFromOpenAiContent, toResponsesContent } = require("./content");
 const responses = require("./chatgpt");
 
 const cfg = OAUTH.xai;
@@ -27,12 +29,7 @@ function normalizeEffort(level, fallback = "high") {
 }
 
 function textContent(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return String(content ?? "");
-  return content
-    .filter((part) => typeof part === "string" || part?.type === "text")
-    .map((part) => (typeof part === "string" ? part : part.text || ""))
-    .join("\n");
+  return textFromOpenAiContent(content);
 }
 
 function toResponsesInput(messages) {
@@ -48,8 +45,12 @@ function toResponsesInput(messages) {
       continue;
     }
 
-    const content = textContent(message.content);
-    if (content || !Array.isArray(message.tool_calls) || !message.tool_calls.length) {
+    const content = toResponsesContent(message.content, message.role, { collapseText: true });
+    if (
+      (typeof content === "string" ? content : content.length) ||
+      !Array.isArray(message.tool_calls) ||
+      !message.tool_calls.length
+    ) {
       input.push({
         type: "message",
         role: message.role || "user",
@@ -193,6 +194,7 @@ async function refreshToken(provider, { fetchImpl = fetch } = {}) {
     accessToken: data.access_token,
     refreshToken: data.refresh_token || provider.refreshToken,
     expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
+    ...identityFromTokens("xai", data),
   };
 }
 

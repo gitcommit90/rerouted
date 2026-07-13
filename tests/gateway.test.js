@@ -332,6 +332,64 @@ describe("gateway auth + models + chat", () => {
   });
 });
 
+describe("gateway request limits", () => {
+  it("returns JSON 413 before routing an oversized chunked request", async () => {
+    const store = createStore(tmpConfig());
+    const apiKey = store.load().apiKey;
+    let routed = false;
+    const gateway = createGateway({
+      store,
+      router: {
+        async chatCompletions() {
+          routed = true;
+          return { ok: false, status: 500, error: {} };
+        },
+      },
+      maxBodyBytes: 256,
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const response = await new Promise((resolve, reject) => {
+        const request = http.request(
+          {
+            host: "127.0.0.1",
+            port: server.address().port,
+            path: "/v1/chat/completions",
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+          },
+          (res) => {
+            const chunks = [];
+            res.on("data", (chunk) => chunks.push(chunk));
+            res.on("end", () => {
+              resolve({
+                status: res.statusCode,
+                body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+              });
+            });
+          }
+        );
+        request.on("error", reject);
+        request.write('{"model":"test","messages":[{"role":"user","content":"');
+        request.write("x".repeat(512));
+        request.end('"}]}');
+      });
+
+      assert.equal(response.status, 413);
+      assert.equal(response.body.error.type, "invalid_request_error");
+      assert.equal(response.body.error.code, "request_body_too_large");
+      assert.equal(routed, false);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
+
 describe("combo ordering + retryable", () => {
   it("marks 429/5xx as retryable", () => {
     assert.equal(isRetryableStatus(429), true);
@@ -598,6 +656,111 @@ describe("format translation", () => {
     assert.equal(body.model, "gpt-5.4");
     assert.equal(body.stream, true);
     assert.ok(Array.isArray(body.input));
+  });
+
+  it("preserves chat image inputs for Responses providers", () => {
+    const content = [
+      { type: "text", text: "Describe both images." },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,QUJD", detail: "high" },
+      },
+      { type: "image_url", image_url: { url: "https://example.com/photo.jpg" } },
+    ];
+    const expected = [
+      { type: "input_text", text: "Describe both images." },
+      {
+        type: "input_image",
+        image_url: "data:image/png;base64,QUJD",
+        detail: "high",
+      },
+      { type: "input_image", image_url: "https://example.com/photo.jpg" },
+    ];
+
+    const chatgptBody = chatgpt.toResponsesBody(
+      { messages: [{ role: "user", content }] },
+      "gpt-5.4",
+      false
+    );
+    const xaiBody = xai.toResponsesBody(
+      { messages: [{ role: "user", content }] },
+      "grok-4.5"
+    );
+
+    assert.deepEqual(chatgptBody.input[0].content, expected);
+    assert.deepEqual(xaiBody.input[0].content, expected);
+  });
+
+  it("maps chat image inputs to Gemini inlineData and fileData", () => {
+    const body = antigravity.toGeminiBody(
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe both images." },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/webp;base64,QUJD" },
+              },
+              {
+                type: "image_url",
+                image_url: { url: "https://example.com/photo.jpg" },
+              },
+            ],
+          },
+        ],
+      },
+      "gemini-3-flash-agent"
+    );
+
+    assert.deepEqual(body.request.contents[0].parts, [
+      { text: "Describe both images." },
+      { inlineData: { mimeType: "image/webp", data: "QUJD" } },
+      { fileData: { fileUri: "https://example.com/photo.jpg", mimeType: "image/*" } },
+    ]);
+  });
+
+  it("keeps Claude conversion and keyed provider image passthrough intact", async () => {
+    const content = [
+      { type: "text", text: "Describe this image." },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,QUJD", detail: "low" },
+      },
+      { type: "image_url", image_url: { url: "https://example.com/photo.jpg" } },
+    ];
+    const claudeBody = claude.toAnthropicBody(
+      { messages: [{ role: "user", content }] },
+      "claude-sonnet-5",
+      false
+    );
+    assert.deepEqual(claudeBody.messages[0].content, [
+      { type: "text", text: "Describe this image." },
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "QUJD" },
+      },
+      {
+        type: "image",
+        source: { type: "url", url: "https://example.com/photo.jpg" },
+      },
+    ]);
+
+    let payload;
+    await openaiCompat.chat(
+      { baseUrl: "https://api.openai.test/v1", apiKey: "key" },
+      {
+        model: "vision-model",
+        body: { messages: [{ role: "user", content }] },
+        stream: false,
+        fetchImpl: async (_url, options) => {
+          payload = JSON.parse(options.body);
+          return new Response("{}", { status: 200 });
+        },
+      }
+    );
+    assert.deepEqual(payload.messages[0].content, content);
   });
 
   it("Codex Responses receives reasoning.effort from OpenAI and Responses clients", () => {
@@ -924,6 +1087,7 @@ describe("claude oauth auth url", () => {
   const EXPECTED_SCOPES = ["org:create_api_key", "user:profile", "user:inference"];
   const EXPECTED_AUTHORIZE = "https://claude.ai/oauth/authorize";
   const EXPECTED_TOKEN = "https://api.anthropic.com/v1/oauth/token";
+  const EXPECTED_PROFILE = "https://api.anthropic.com/api/oauth/profile";
   const EXPECTED_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
   it("builds the expected Claude authorize contract", () => {
@@ -976,6 +1140,40 @@ describe("claude oauth auth url", () => {
     }
   });
 
+  it("treats Claude profile lookup as best-effort and uses profile-specific headers", async () => {
+    const { fetchClaudeProfile } = require("../src/lib/oauth");
+    let seen;
+    const profile = await fetchClaudeProfile("at_test", {
+      fetchImpl: async (url, opts) => {
+        seen = { url: String(url), opts };
+        return { ok: false, status: 401 };
+      },
+    });
+
+    assert.equal(profile, null);
+    assert.equal(seen.url, EXPECTED_PROFILE);
+    assert.deepEqual(seen.opts.headers, {
+      Authorization: "Bearer at_test",
+      "Content-Type": "application/json",
+      "Cache-Control": "no-cache",
+    });
+    assert.equal(seen.opts.headers["Anthropic-Version"], undefined);
+    assert.equal(seen.opts.headers["Anthropic-Beta"], undefined);
+    assert.ok(seen.opts.signal instanceof AbortSignal);
+  });
+
+  it("bounds a stalled optional Claude profile lookup", async () => {
+    const { fetchClaudeProfile } = require("../src/lib/oauth");
+    const started = Date.now();
+    const profile = await fetchClaudeProfile("at_test", {
+      fetchImpl: async () => new Promise(() => {}),
+      timeoutMs: 10,
+    });
+
+    assert.equal(profile, null);
+    assert.ok(Date.now() - started < 250);
+  });
+
   it("completeOAuth claude posts JSON to api.anthropic.com", async () => {
     const {
       startOAuth,
@@ -988,9 +1186,21 @@ describe("claude oauth auth url", () => {
     assert.ok(session?.codeVerifier);
     // Users can paste the full callback URL from the browser address bar.
     const pasteCode = `http://localhost:54545/callback?code=authcode123&state=${session.state}`;
-    let seen = null;
+    const seen = [];
     const fetchImpl = async (url, opts) => {
-      seen = { url: String(url), opts };
+      seen.push({ url: String(url), opts });
+      if (String(url) === EXPECTED_PROFILE) {
+        return {
+          ok: true,
+          async json() {
+            return {
+              email_address: "claude@example.com",
+              organization: { name: "Example Org" },
+              tokenAccount: { uuid: "account-123" },
+            };
+          },
+        };
+      }
       return {
         ok: true,
         async json() {
@@ -1010,17 +1220,20 @@ describe("claude oauth auth url", () => {
       assert.equal(tokens.type, "claude");
       assert.equal(tokens.accessToken, "at_test");
       assert.equal(tokens.refreshToken, "rt_test");
-      assert.ok(seen, "token fetch must be called");
-      assert.equal(seen.url, EXPECTED_TOKEN);
-      assert.equal(seen.opts.method, "POST");
-      assert.equal(seen.opts.headers["Content-Type"], "application/json");
-      assert.equal(seen.opts.headers.Accept, "application/json");
+      assert.equal(tokens.email, "claude@example.com");
+      assert.equal(tokens.profileName, "Example Org");
+      assert.equal(tokens.accountId, "account-123");
+      assert.equal(seen.length, 2);
+      assert.equal(seen[0].url, EXPECTED_TOKEN);
+      assert.equal(seen[0].opts.method, "POST");
+      assert.equal(seen[0].opts.headers["Content-Type"], "application/json");
+      assert.equal(seen[0].opts.headers.Accept, "application/json");
       assert.ok(
-        !seen.opts.headers["User-Agent"] ||
-          !String(seen.opts.headers["User-Agent"]).startsWith("claude-cli/"),
+        !seen[0].opts.headers["User-Agent"] ||
+          !String(seen[0].opts.headers["User-Agent"]).startsWith("claude-cli/"),
         "token exchange must not use the inference User-Agent"
       );
-      const body = JSON.parse(seen.opts.body);
+      const body = JSON.parse(seen[0].opts.body);
       // Keep the token payload field order stable.
       assert.deepEqual(Object.keys(body), [
         "code",
@@ -1036,6 +1249,8 @@ describe("claude oauth auth url", () => {
       assert.equal(body.client_id, EXPECTED_CLIENT_ID);
       assert.equal(body.redirect_uri, r.redirectUri);
       assert.equal(body.code_verifier, session.codeVerifier);
+      assert.equal(seen[1].url, EXPECTED_PROFILE);
+      assert.equal(seen[1].opts.headers.Authorization, "Bearer at_test");
     } finally {
       clearPending("claude");
     }

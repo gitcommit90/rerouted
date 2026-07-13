@@ -1,8 +1,10 @@
 "use strict";
 
 const { OAUTH } = require("../constants");
+const { identityFromTokens } = require("../oauth-identity");
 const { openaiChunk, formatSseData, SSE_DONE, createSseParser } = require("../sse");
 const { applyResponsesEffort } = require("./effort");
+const { textFromOpenAiContent, toResponsesContent } = require("./content");
 
 const cfg = OAUTH.chatgpt;
 
@@ -14,23 +16,14 @@ function toResponsesBody(body, model, stream) {
   const input = [];
   for (const m of body.messages || []) {
     if (m.role === "system") {
-      instructions.push(typeof m.content === "string" ? m.content : String(m.content ?? ""));
+      instructions.push(textFromOpenAiContent(m.content));
       continue;
     }
     const role = m.role === "assistant" ? "assistant" : m.role === "developer" ? "developer" : "user";
-    const text =
-      typeof m.content === "string"
-        ? m.content
-        : Array.isArray(m.content)
-          ? m.content
-              .filter((p) => p.type === "text" || typeof p === "string")
-              .map((p) => (typeof p === "string" ? p : p.text))
-              .join("\n")
-          : String(m.content ?? "");
     input.push({
       type: "message",
       role,
-      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+      content: toResponsesContent(m.content, role),
     });
   }
   if (!input.length) {
@@ -319,11 +312,13 @@ async function refreshToken(provider, { fetchImpl = fetch } = {}) {
     throw err;
   }
   const data = await res.json();
+  const identity = identityFromTokens("chatgpt", data);
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token || provider.refreshToken,
     expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
-    accountId: provider.accountId,
+    ...identity,
+    accountId: identity.accountId || provider.accountId,
   };
 }
 

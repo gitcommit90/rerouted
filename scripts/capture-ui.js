@@ -140,7 +140,7 @@ function seedOnboarded() {
         id: "prov_chatgpt_demo",
         type: "chatgpt",
         name: "ChatGPT Plus",
-        email: "demo@example.com",
+        email: "fantasticfox@gmail.com",
         enabled: true,
         models: OAUTH.chatgpt.models,
         accessToken: "x",
@@ -150,11 +150,30 @@ function seedOnboarded() {
         id: "prov_claude_demo",
         type: "claude",
         name: "Claude Pro",
-        email: "route@example.com",
+        profileName: "Route Fox",
         enabled: true,
         models: OAUTH.claude.models,
         accessToken: "x",
         createdAt: now - 43_200_000,
+      },
+      {
+        id: "prov_antigravity_demo",
+        type: "antigravity",
+        name: "Antigravity (gravitypilot@example.com)",
+        email: "gravitypilot@example.com",
+        enabled: true,
+        models: OAUTH.antigravity.models,
+        accessToken: "x",
+        createdAt: now - 21_600_000,
+      },
+      {
+        id: "prov_xai_demo",
+        type: "xai",
+        name: "xAI (Grok)",
+        enabled: true,
+        models: OAUTH.xai.models,
+        accessToken: "x",
+        createdAt: now - 10_800_000,
       },
     ],
     combos: [
@@ -181,6 +200,7 @@ function registerIpc() {
       name: p.name,
       accountAlias: p.accountAlias || null,
       email: p.email,
+      profileName: p.profileName,
       enabled: p.enabled !== false,
       hasToken: !!(p.accessToken || p.apiKey),
       models: p.models || defaultModelsForType(p.type),
@@ -288,9 +308,9 @@ function registerIpc() {
         {
           providerId: "demo",
           type: "chatgpt",
-          name: "ChatGPT",
+          name: "ChatGPT (fantasticfox@gmail.com)",
           accountAlias: "oauth1",
-          email: "demo@example.com",
+          email: "fantasticfox@gmail.com",
           status: "ok",
           source: "ChatGPT quota API",
           plan: "plus",
@@ -476,6 +496,13 @@ app.whenReady().then(async () => {
         (async () => {
           const b = document.getElementById("btn-scan");
           if (b) { b.click(); await new Promise(r => setTimeout(r, 400)); }
+          const results = document.getElementById("detect-results");
+          if (!results?.textContent.includes("use*@example.com")) {
+            throw new Error("Detected account email was not privacy masked");
+          }
+          if (results.outerHTML.includes("user@example.com")) {
+            throw new Error("Raw detected account email leaked into onboarding markup");
+          }
           return true;
         })()
       `);
@@ -516,6 +543,65 @@ app.whenReady().then(async () => {
       settings: ".settings-group",
     }[p] || "#view > *";
     await capture(`app-${p}.png`, selector);
+    if (p === "providers") {
+      await win.webContents.executeJavaScript(`
+        (() => {
+          const chatgpt = document.querySelector('[data-prov-card="prov_chatgpt_demo"]');
+          const claude = document.querySelector('[data-prov-card="prov_claude_demo"]');
+          const antigravity = document.querySelector('[data-prov-card="prov_antigravity_demo"]');
+          const xai = document.querySelector('[data-prov-card="prov_xai_demo"]');
+          if (!chatgpt || !claude || !antigravity || !xai) {
+            throw new Error("Identity fixtures did not render");
+          }
+          if (!chatgpt.querySelector(".row-sub")?.textContent.includes("fant********@gmail.com")) {
+            throw new Error("Account email was not privacy masked");
+          }
+          if (antigravity.querySelector(".row-title")?.textContent.trim() !== "Antigravity") {
+            throw new Error("Email suffix was not removed from Antigravity account name");
+          }
+          if (!antigravity.querySelector(".row-sub")?.textContent.includes("grav********@example.com")) {
+            throw new Error("Antigravity account email was not privacy masked");
+          }
+          if (!claude.querySelector(".row-sub")?.textContent.includes("Route Fox")) {
+            throw new Error("Profile name was not used when account email was unavailable");
+          }
+          const markup = chatgpt.outerHTML + antigravity.outerHTML;
+          if (markup.includes("fantasticfox@gmail.com") || markup.includes("gravitypilot@example.com")) {
+            throw new Error("Raw account email leaked into provider markup");
+          }
+          if (!chatgpt.querySelector(".alias-badge")?.textContent.includes("Account 1")) {
+            throw new Error("OAuth account alias was not preserved");
+          }
+          if (!xai.querySelector(".row-sub")?.textContent.includes("Account 1")) {
+            throw new Error("OAuth alias was not used when account identity was unavailable");
+          }
+          if (xai.querySelector(".account-copy")?.textContent.includes("prov_")) {
+            throw new Error("Internal provider id leaked into account copy");
+          }
+          return true;
+        })()
+      `);
+    }
+    if (p === "quota") {
+      await win.webContents.executeJavaScript(`
+        (() => {
+          const card = document.querySelector(".quota-card");
+          if (!card?.textContent.includes("fant********@gmail.com")) {
+            throw new Error("Quota account email was not privacy masked");
+          }
+          if (card.querySelector(".row-title")?.textContent.trim() !== "ChatGPT") {
+            throw new Error("Email suffix was not removed from quota account name");
+          }
+          if (card.outerHTML.includes("fantasticfox@gmail.com")) {
+            throw new Error("Raw account email leaked into quota markup");
+          }
+          if (!card.querySelector(".alias-badge")?.textContent.includes("Account 1")) {
+            throw new Error("Quota OAuth account alias was not preserved");
+          }
+          return true;
+        })()
+      `);
+    }
   }
 
   await win.webContents.executeJavaScript(`

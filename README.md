@@ -95,7 +95,7 @@ ReRouted is an independent project and is not affiliated with or endorsed by any
 
 ### 1. Install
 
-[Download ReRouted 0.3.1 for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/download/v0.3.1/ReRouted-0.3.1-arm64.dmg), open the DMG, and drag ReRouted to Applications.
+[Download ReRouted 0.4.1 for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/download/v0.4.1/ReRouted-0.4.1-arm64.dmg), open the DMG, and drag ReRouted to Applications.
 
 The macOS release is Developer ID signed, notarized by Apple, and stapled for a normal Gatekeeper launch.
 
@@ -149,7 +149,7 @@ The gateway continues running when the panel is hidden. Quitting ReRouted stops 
 | `GET /v1/models` | Enabled direct models and named routes |
 | `POST /v1/chat/completions` | Streaming or non-streaming routed completions |
 
-Requests require a generated bearer key except for `/` and `/health`. ReRouted currently targets clients that use OpenAI-style chat completions; embeddings, images, audio, and the rest of the OpenAI platform API are outside its scope.
+Requests require a generated bearer key except for `/` and `/health`. OpenAI-style image inputs inside chat-completion messages are supported when the selected upstream model accepts them. The separate `/v1/images` generation API, embeddings, audio, and the rest of the OpenAI platform API are outside ReRouted's scope.
 
 ## Local-first, with the boundaries stated plainly
 
@@ -185,7 +185,7 @@ Questions and bug reports are welcome in [GitHub Issues](https://github.com/gitc
 
 ## Current release
 
-ReRouted `0.4.0` ships for Apple Silicon macOS with a Developer ID signature, stapled Apple notarization tickets, and in-app updates backed by stable GitHub Releases. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
+ReRouted `0.4.1` ships for Apple Silicon macOS with masked OAuth account identities, image inputs in chat completions, a Developer ID signature, stapled Apple notarization tickets, and in-app updates backed by stable GitHub Releases. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
 
 ReRouted is released by [Public Bytes](https://publicbytes.org), a nonprofit building practical technology for public good.
 

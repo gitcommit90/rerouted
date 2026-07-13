@@ -4,12 +4,20 @@ const http = require("node:http");
 const { DEFAULT_PORT } = require("./constants");
 const logger = require("./logger");
 
+const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
+
 /**
  * OpenAI-compatible HTTP gateway.
  * Auth: Authorization: Bearer <apiKey>
  * Routes: GET /v1/models, POST /v1/chat/completions, GET /health
  */
-function createGateway({ store, router, port = DEFAULT_PORT, host = "127.0.0.1" } = {}) {
+function createGateway({
+  store,
+  router,
+  port = DEFAULT_PORT,
+  host = "127.0.0.1",
+  maxBodyBytes = MAX_JSON_BODY_BYTES,
+} = {}) {
   let server = null;
   let listeningPort = null;
   let listeningHost = null;
@@ -50,8 +58,33 @@ function createGateway({ store, router, port = DEFAULT_PORT, host = "127.0.0.1" 
   function readBody(req) {
     return new Promise((resolve, reject) => {
       const chunks = [];
-      req.on("data", (c) => chunks.push(c));
+      let size = 0;
+      let settled = false;
+      const tooLarge = () => {
+        const error = new Error("Request body is too large");
+        error.code = "REQUEST_BODY_TOO_LARGE";
+        return error;
+      };
+      const declaredLength = Number(req.headers["content-length"]);
+      if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+        req.resume();
+        reject(tooLarge());
+        return;
+      }
+      req.on("data", (c) => {
+        if (settled) return;
+        size += c.length;
+        if (size > maxBodyBytes) {
+          settled = true;
+          chunks.length = 0;
+          reject(tooLarge());
+          return;
+        }
+        chunks.push(c);
+      });
       req.on("end", () => {
+        if (settled) return;
+        settled = true;
         const raw = Buffer.concat(chunks).toString("utf8");
         if (!raw) return resolve({});
         try {
@@ -60,7 +93,11 @@ function createGateway({ store, router, port = DEFAULT_PORT, host = "127.0.0.1" 
           reject(e);
         }
       });
-      req.on("error", reject);
+      req.on("error", (error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      });
     });
   }
 
@@ -124,7 +161,21 @@ function createGateway({ store, router, port = DEFAULT_PORT, host = "127.0.0.1" 
         let body;
         try {
           body = await readBody(req);
-        } catch {
+        } catch (error) {
+          if (error?.code === "REQUEST_BODY_TOO_LARGE") {
+            logger.warn("chat/completions: request body too large");
+            res.writeHead(413, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: {
+                  message: `Request body exceeds the ${Math.floor(maxBodyBytes / (1024 * 1024))} MiB limit`,
+                  type: "invalid_request_error",
+                  code: "request_body_too_large",
+                },
+              })
+            );
+            return;
+          }
           logger.warn("chat/completions: invalid JSON body");
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(
@@ -273,4 +324,4 @@ function createGateway({ store, router, port = DEFAULT_PORT, host = "127.0.0.1" 
   return { start, stop, restart, isListening, getAddress, checkAuth, handle, validKeys };
 }
 
-module.exports = { createGateway };
+module.exports = { createGateway, MAX_JSON_BODY_BYTES };

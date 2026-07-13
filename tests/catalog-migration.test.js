@@ -86,7 +86,7 @@ describe("OAuth catalog migration", () => {
       combos: [],
     });
 
-    assert.equal(migrated.version, 6);
+    assert.equal(migrated.version, 7);
     assert.deepEqual(migrated.providers[0].modelLocks, {});
     assert.deepEqual(migrated.providers[1].modelLocks, { "*": oldLock });
 
