@@ -20,9 +20,6 @@ const openaiCompat = require("../src/lib/providers/openai-compat");
 const xai = require("../src/lib/providers/xai");
 const { orderMembers, isRetryableStatus } = require("../src/lib/router");
 
-const SCRATCH = process.env.REROUTED_SCRATCH || "/tmp/grok-goal-bf3f39dc0f60/implementer";
-fs.mkdirSync(SCRATCH, { recursive: true });
-
 function tmpConfig() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rr-test-"));
   return path.join(dir, "config.json");
@@ -1369,7 +1366,3 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
     assert.ok(joined.includes("[DONE]"));
   });
 });
-
-// Write a short evidence log
-const logPath = path.join(SCRATCH, "unit-tests-selfcheck.txt");
-fs.writeFileSync(logPath, `gateway tests module loaded at ${new Date().toISOString()}\n`);
