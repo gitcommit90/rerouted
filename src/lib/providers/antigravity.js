@@ -3,6 +3,7 @@
 const { OAUTH } = require("../constants");
 const { openaiChunk, formatSseData, SSE_DONE, createSseParser } = require("../sse");
 const { applyGeminiEffort } = require("./effort");
+const { textFromOpenAiContent, toGeminiParts } = require("./content");
 
 const cfg = OAUTH.antigravity;
 
@@ -11,23 +12,19 @@ function toGeminiBody(body, model) {
   const contents = [];
   for (const m of body.messages || []) {
     if (m.role === "system") {
-      systemParts.push(typeof m.content === "string" ? m.content : String(m.content ?? ""));
+      systemParts.push(textFromOpenAiContent(m.content));
       continue;
     }
     const role = m.role === "assistant" ? "model" : "user";
-    const text =
-      typeof m.content === "string"
-        ? m.content
-        : Array.isArray(m.content)
-          ? m.content
-              .filter((p) => p.type === "text")
-              .map((p) => p.text)
-              .join("\n")
-          : String(m.content ?? "");
+    const parts = toGeminiParts(m.content);
     if (contents.length && contents[contents.length - 1].role === role) {
-      contents[contents.length - 1].parts[0].text += `\n${text}`;
+      const prior = contents[contents.length - 1].parts;
+      if (prior.at(-1)?.text != null && parts[0]?.text != null) {
+        prior[prior.length - 1].text += `\n${parts.shift().text}`;
+      }
+      prior.push(...parts);
     } else {
-      contents.push({ role, parts: [{ text }] });
+      contents.push({ role, parts });
     }
   }
   if (!contents.length) contents.push({ role: "user", parts: [{ text: "Hello" }] });

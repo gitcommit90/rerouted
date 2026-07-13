@@ -169,6 +169,7 @@ describe("quota service", () => {
             type: "chatgpt",
             name: "ChatGPT",
             accountAlias: "oauth1",
+            profileName: "Fantastic Fox",
             accessToken: "token",
             enabled: true,
           },
@@ -195,6 +196,7 @@ describe("quota service", () => {
     });
     const snapshot = await service.refresh();
     assert.equal(snapshot.accounts[0].accountAlias, "oauth1");
+    assert.equal(snapshot.accounts[0].profileName, "Fantastic Fox");
     assert.equal(snapshot.accounts[0].status, "ok");
     assert.equal(snapshot.accounts[1].status, "unsupported");
   });

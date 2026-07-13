@@ -4,6 +4,12 @@ const http = require("node:http");
 const crypto = require("node:crypto");
 const { OAUTH } = require("./constants");
 const { generateId } = require("./password");
+const {
+  applyIdentity,
+  identityFromProfile,
+  identityFromTokens,
+  mergeIdentity,
+} = require("./oauth-identity");
 const logger = require("./logger");
 
 function b64url(buf) {
@@ -452,6 +458,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
     });
     if (!res.ok) throw new Error(`Token exchange failed: ${res.status} ${await res.text()}`);
     const data = await res.json();
+    const identity = identityFromTokens("chatgpt", data);
     tokens = {
       type: "chatgpt",
       accessToken: data.access_token,
@@ -459,6 +466,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
       expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
       models: c.models.map((m) => ({ ...m, enabled: true })),
       name: "ChatGPT",
+      ...identity,
     };
   } else if (t === "claude") {
     const c = OAUTH.claude;
@@ -525,6 +533,11 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
       logger.error(msg);
       throw new Error(msg);
     }
+    const profile = await fetchClaudeProfile(data.access_token, { fetchImpl });
+    const identity = mergeIdentity(
+      identityFromProfile("claude", profile),
+      identityFromProfile("claude", data)
+    );
     tokens = {
       type: "claude",
       accessToken: data.access_token,
@@ -532,6 +545,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
       expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
       models: c.models.map((m) => ({ ...m, enabled: true })),
       name: "Claude",
+      ...identity,
     };
   } else if (t === "antigravity") {
     const c = OAUTH.antigravity;
@@ -549,28 +563,28 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
     });
     if (!res.ok) throw new Error(`Token exchange failed: ${res.status} ${await res.text()}`);
     const data = await res.json();
-    let email;
+    let profile;
     try {
       const ui = await fetchImpl(`${c.userInfoUrl}?alt=json`, {
         headers: { Authorization: `Bearer ${data.access_token}` },
       });
       if (ui.ok) {
-        const u = await ui.json();
-        email = u.email;
+        profile = await ui.json();
       }
     } catch {
       /* ignore */
     }
+    const identity = identityFromProfile("antigravity", profile);
     tokens = {
       type: "antigravity",
       accessToken: data.access_token,
       refreshToken: data.refresh_token,
       expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
-      email,
       clientId: c.clientId,
       clientSecret: c.clientSecret,
       models: c.models.map((m) => ({ ...m, enabled: true })),
-      name: email ? `Antigravity (${email})` : "Antigravity",
+      name: "Antigravity",
+      ...identity,
     };
   } else if (t === "xai") {
     const c = OAUTH.xai;
@@ -588,6 +602,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
     });
     if (!res.ok) throw new Error(`Token exchange failed: ${res.status} ${await res.text()}`);
     const data = await res.json();
+    const identity = identityFromTokens("xai", data);
     tokens = {
       type: "xai",
       accessToken: data.access_token,
@@ -595,6 +610,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
       expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
       models: c.models.map((m) => ({ ...m, enabled: true })),
       name: "xAI (Grok)",
+      ...identity,
     };
   } else {
     throw new Error(`Unknown type ${type}`);
@@ -607,6 +623,91 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
     createdAt: Date.now(),
     ...tokens,
   };
+}
+
+async function fetchClaudeProfile(
+  accessToken,
+  { fetchImpl = fetch, timeoutMs = 5000 } = {}
+) {
+  if (!accessToken) return null;
+  const controller = new AbortController();
+  let timeout;
+  try {
+    // Claude Code's profile call uses OAuth bearer auth with JSON/no-cache headers,
+    // not the versioned inference headers used for /v1/messages.
+    const request = (async () => {
+      const response = await fetchImpl(OAUTH.claude.profileUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      return response.json();
+    })();
+    const profile = await Promise.race([
+      request,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Claude profile request timed out"));
+        }, timeoutMs);
+      }),
+    ]);
+    return profile && typeof profile === "object" ? profile : null;
+  } catch {
+    // Profile enrichment is best effort; valid tokens must still be saved.
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function backfillClaudeProfiles(
+  providers,
+  { fetchImpl = fetch, timeoutMs = 5000, refreshImpl } = {}
+) {
+  const targets = (providers || []).filter(
+    (provider) =>
+      provider?.type === "claude" &&
+      provider.accessToken &&
+      (!provider.email || !provider.profileName)
+  );
+  const results = await Promise.all(
+    targets.map(async (provider) => {
+      let tokens = null;
+      let accessToken = provider.accessToken;
+      let refreshed = false;
+      const refresh = async () => {
+        if (!refreshImpl || !provider.refreshToken || refreshed) return;
+        refreshed = true;
+        try {
+          tokens = await refreshImpl(provider, { fetchImpl });
+          accessToken = tokens?.accessToken || accessToken;
+        } catch {
+          tokens = null;
+        }
+      };
+
+      if (provider.expiresAt && provider.expiresAt < Date.now() + 60_000) await refresh();
+      let profile = await fetchClaudeProfile(accessToken, { fetchImpl, timeoutMs });
+      if (!profile && !refreshed) {
+        await refresh();
+        if (tokens?.accessToken) {
+          profile = await fetchClaudeProfile(tokens.accessToken, { fetchImpl, timeoutMs });
+        }
+      }
+      return { tokens, identity: identityFromProfile("claude", profile) };
+    })
+  );
+
+  return targets.reduce((changed, provider, index) => {
+    const result = results[index];
+    if (result.tokens) Object.assign(provider, result.tokens);
+    return applyIdentity(provider, result.identity) || !!result.tokens || changed;
+  }, false);
 }
 
 function oauthStatus(type) {
@@ -630,4 +731,6 @@ module.exports = {
   clearPending,
   buildAuthUrl,
   normalizeAuthCode,
+  fetchClaudeProfile,
+  backfillClaudeProfiles,
 };

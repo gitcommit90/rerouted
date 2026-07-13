@@ -22,8 +22,14 @@ const { createGateway } = require("./lib/gateway");
 const { createUsageStore, hydrateUsageIdentity } = require("./lib/usage");
 const logger = require("./lib/logger");
 const { hashPassword, verifyPassword, generateId, generateApiKey } = require("./lib/password");
-const { detectAll, summarizeDetected } = require("./lib/detect");
-const { startOAuth, completeOAuth, oauthStatus, clearPending } = require("./lib/oauth");
+const { detectAll, summarizeDetected, backfillLocalOAuthIdentities } = require("./lib/detect");
+const {
+  startOAuth,
+  completeOAuth,
+  oauthStatus,
+  clearPending,
+  backfillClaudeProfiles,
+} = require("./lib/oauth");
 const { createQuotaService } = require("./lib/quota");
 const { createSessionAuth, isMacSessionActive } = require("./lib/session-auth");
 const { runProviderModelTest } = require("./lib/model-test");
@@ -301,6 +307,7 @@ function registerIpc() {
         name: p.name,
         accountAlias: p.accountAlias || null,
         email: p.email,
+        profileName: p.profileName,
         enabled: p.enabled !== false,
         hasToken: !!(p.accessToken || p.apiKey),
         models,
@@ -511,6 +518,7 @@ function registerIpc() {
               accountId: account.accountId || prev.accountId,
               projectId: account.projectId || prev.projectId,
               email: account.email || prev.email,
+              profileName: account.profileName || prev.profileName,
               name: prev.name || account.name,
               enabled: true,
             };
@@ -529,6 +537,8 @@ function registerIpc() {
           id: providerId || account.id,
           type: account.type,
           name: account.name,
+          email: account.email || null,
+          profileName: account.profileName || null,
           reauthed: !!providerId,
         },
       };
@@ -876,6 +886,8 @@ app.whenReady().then(async () => {
   }
 
   applyStateEnv();
+  const identityConfig = store.load();
+  if (backfillLocalOAuthIdentities(identityConfig.providers)) store.save(identityConfig);
   if (process.platform === "darwin") {
     let active = false;
     try {
@@ -940,6 +952,18 @@ app.whenReady().then(async () => {
   });
 
   createPanel();
+  const claudeAdapter = getAdapter("claude");
+  void backfillClaudeProfiles(store.load().providers, {
+    refreshImpl: (provider, options) => claudeAdapter.refreshToken(provider, options),
+  })
+    .then((changed) => {
+      if (!changed) return;
+      store.save(store.load());
+      if (panel && !panel.isDestroyed()) {
+        panel.webContents.send("app:provider-identities-updated");
+      }
+    })
+    .catch((error) => logger.warn(`Could not enrich Claude account identities: ${error.message}`));
   updateService.schedule();
 
   try {

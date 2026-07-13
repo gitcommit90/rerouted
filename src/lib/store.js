@@ -5,8 +5,9 @@ const path = require("node:path");
 const { generateApiKey, generateId } = require("./password");
 const { DEFAULT_PORT, OAUTH, RETIRED_OAUTH_MODELS } = require("./constants");
 const { ensureUniqueComboNames, providerRouteIds } = require("./combos");
+const { backfillTokenIdentity } = require("./oauth-identity");
 
-const CONFIG_VERSION = 6;
+const CONFIG_VERSION = 7;
 const COMBO_NAME_MIGRATION_VERSION = 5;
 const XAI_LOCK_RESET_VERSION = 6;
 const OAUTH_ALIAS_RE = /^oauth([1-9]\d*)$/;
@@ -166,6 +167,12 @@ function migrate(cfg) {
   }
 
   for (const p of cfg.providers || []) {
+    backfillTokenIdentity(p);
+    const family = canonicalProviderType(p.type);
+    const providerName = OAUTH[family]?.name;
+    if (p.email && providerName && p.name === `${providerName} (${p.email})`) {
+      p.name = providerName;
+    }
     normalizeModelLocks(p);
     if (needsXaiLockReset && canonicalProviderType(p.type) === "xai") {
       p.modelLocks = {};

@@ -346,6 +346,7 @@ function accountBase(provider) {
     name: provider.name || provider.type,
     accountAlias: provider.accountAlias || null,
     email: provider.email || null,
+    profileName: provider.profileName || null,
     refreshedAt: null,
     source: null,
     plan: null,

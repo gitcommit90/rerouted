@@ -1,6 +1,8 @@
 "use strict";
 
 const api = window.rerouted;
+const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
+  window.ReroutedAccountIdentity;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const nav = $("#nav");
@@ -330,8 +332,8 @@ function renderAutoDetect() {
           <label class="check-item">
             <input type="checkbox" checked data-id="${esc(f.id)}" />
             <div>
-              <div class="card-title">${esc(f.name)}</div>
-              <div class="card-sub">${esc(f.type)} · ${esc(f.source)}${f.email ? " · " + esc(f.email) : ""}</div>
+              <div class="card-title">${esc(accountDisplayName(f.name, f.email, providerLabel(f.type)))}</div>
+              <div class="card-sub">${esc(f.type)} · ${esc(f.source)}${f.email ? " · " + esc(maskAccountEmail(f.email)) : ""}</div>
             </div>
           </label>`
           )
@@ -1085,13 +1087,23 @@ function renderProviders() {
               const onCount = models.filter((m) => m.enabled !== false).length;
               const glyphClass = OAUTH_TYPES.has(p.type) ? p.type : "keyed";
               const glyph = providerLabel(p.type).slice(0, 2).toUpperCase();
+              const displayName = accountDisplayName(
+                p.name,
+                p.email,
+                providerLabel(p.type)
+              );
+              const identity = accountIdentityLabel(
+                p.email,
+                p.profileName,
+                p.accountAlias ? aliasLabel(p.accountAlias) : providerLabel(p.type)
+              );
               return `
       <section class="account-card group-list" data-prov-card="${esc(p.id)}">
         <div class="account-head" data-expand="${esc(p.id)}">
           <div class="account-glyph ${esc(glyphClass)}">${esc(glyph)}</div>
           <div class="account-copy">
-            <div class="row-title">${esc(p.name || providerLabel(p.type))}</div>
-            <div class="row-sub">${p.email ? esc(p.email) : esc(providerLabel(p.type))} · ${onCount} of ${models.length} models enabled</div>
+            <div class="row-title" title="${esc(displayName)}">${esc(displayName)}</div>
+            <div class="row-sub" title="${esc(identity)}">${esc(identity)} · ${onCount} of ${models.length} models enabled</div>
           </div>
           <div class="account-side">
             ${p.accountAlias ? `<span class="alias-badge">${esc(aliasLabel(p.accountAlias))}</span>` : ""}
@@ -1529,7 +1541,16 @@ function quotaWindowHtml(window) {
 
 function quotaAccountHtml(account) {
   const glyph = providerLabel(account.type).slice(0, 2).toUpperCase();
-  const identity = account.name || providerLabel(account.type);
+  const identity = accountDisplayName(
+    account.name,
+    account.email,
+    providerLabel(account.type)
+  );
+  const accountLabel = accountIdentityLabel(
+    account.email,
+    account.profileName,
+    account.accountAlias ? aliasLabel(account.accountAlias) : providerLabel(account.type)
+  );
   const statusLabel = {
     ok: "Live",
     empty: "No windows",
@@ -1555,7 +1576,7 @@ function quotaAccountHtml(account) {
       <div class="account-glyph ${esc(account.type)}">${esc(glyph)}</div>
       <div class="quota-account-copy">
         <div class="row-title" title="${esc(identity)}">${esc(identity)}</div>
-        <div class="row-sub">${account.email ? `${esc(account.email)} · ` : ""}${esc(account.plan || providerLabel(account.type))}</div>
+        <div class="row-sub" title="${esc(accountLabel)}">${esc(accountLabel)} · ${esc(account.plan || providerLabel(account.type))}</div>
       </div>
       ${account.accountAlias ? `<span class="alias-badge">${esc(aliasLabel(account.accountAlias))}</span>` : ""}
       <span class="quota-status ${esc(account.status)}">${esc(statusLabel)}</span>
@@ -2040,6 +2061,25 @@ api.on("app:update-state", (update) => {
   if (!state) return;
   state.update = update;
   if (page === "settings") renderSettings();
+});
+
+api.on("app:provider-identities-updated", async () => {
+  await refresh();
+  if (quotaState?.accounts?.length) {
+    quotaState.accounts = quotaState.accounts.map((account) => {
+      const provider = (state.providers || []).find((item) => item.id === account.providerId);
+      return provider
+        ? {
+            ...account,
+            name: provider.name,
+            email: provider.email,
+            profileName: provider.profileName,
+            accountAlias: provider.accountAlias,
+          }
+        : account;
+    });
+  }
+  if (page === "providers" || page === "quota") render();
 });
 
 api.on("app:open-settings", () => {
