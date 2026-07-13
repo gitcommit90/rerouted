@@ -5,3 +5,4 @@ capture-out/
 .DS_Store
 config.json
 .scratch/
+AGENTS.md
