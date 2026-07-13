@@ -1,6 +1,6 @@
 "use strict";
 
-const { applyOpenAIEffort } = require("./effort");
+const { applyGlmEffort, applyOpenAIEffort } = require("./effort");
 
 const MODELS_TIMEOUT_MS = 15_000;
 
@@ -78,7 +78,11 @@ async function chat(provider, { model, body, stream, signal, fetchImpl = fetch }
     model: model || body.model,
     stream: !!stream,
   };
-  applyOpenAIEffort(payload, body, { omit: /grok-composer/i.test(String(model || body.model)) });
+  if (provider.type === "glm") {
+    applyGlmEffort(payload, body);
+  } else {
+    applyOpenAIEffort(payload, body, { omit: /grok-composer/i.test(String(model || body.model)) });
+  }
   const res = await fetchImpl(url, {
     method: "POST",
     headers: {

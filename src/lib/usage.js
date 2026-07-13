@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { KEYED_PRESETS, OAUTH } = require("./constants");
 
 const MAX_EVENTS = 20_000;
 const RECENT_UI = 80;
@@ -31,6 +32,60 @@ function extractUsage(openAiJson) {
     ) || 0;
   const total = Number(u.total_tokens || prompt + completion) || prompt + completion;
   return { prompt_tokens: prompt, completion_tokens: completion, cached_tokens: cached, total_tokens: total };
+}
+
+function canonicalProviderType(type) {
+  return type === "codex" ? "chatgpt" : type;
+}
+
+function isInternalProviderName(name) {
+  return !name || /^prov_/i.test(String(name).trim());
+}
+
+function providerTypeName(type) {
+  const canonical = canonicalProviderType(type);
+  return OAUTH[canonical]?.name || KEYED_PRESETS[canonical]?.name || canonical || null;
+}
+
+function providerDisplayName(entry) {
+  const name = isInternalProviderName(entry?.providerName) ? null : String(entry.providerName).trim();
+  return name || providerTypeName(entry?.providerType) || (entry?.providerId ? "Disconnected account" : "Local route");
+}
+
+function providerAggregateKey(entry) {
+  if (entry?.providerId) return `id:${entry.providerId}`;
+  const type = canonicalProviderType(entry?.providerType);
+  if (type || entry?.accountAlias) return `account:${type || "unknown"}:${entry.accountAlias || "default"}`;
+  if (!isInternalProviderName(entry?.providerName)) return `name:${entry.providerName}`;
+  return "local";
+}
+
+function providerAggregateLabel(entry) {
+  const name = providerDisplayName(entry);
+  return entry?.accountAlias ? `${name} · ${entry.accountAlias}` : name;
+}
+
+function hydrateUsageIdentity(entry, providers = []) {
+  const current = (providers || []).find((provider) => provider.id === entry?.providerId);
+  const providerType = canonicalProviderType(entry?.providerType || current?.type) || null;
+  const storedName = isInternalProviderName(entry?.providerName) ? null : entry.providerName;
+  const currentName = isInternalProviderName(current?.name) ? null : current?.name;
+  const providerName =
+    storedName ||
+    currentName ||
+    providerTypeName(providerType) ||
+    (entry?.providerId ? "Disconnected account" : "Local route");
+  const accountAlias = entry?.accountAlias || current?.accountAlias || null;
+  const { providerId: _providerId, attempts: _attempts, ...safe } = entry || {};
+  return {
+    ...safe,
+    providerType,
+    providerName,
+    accountAlias,
+    ...(Object.hasOwn(safe, "provider")
+      ? { provider: accountAlias ? `${providerName} · ${accountAlias}` : providerName }
+      : {}),
+  };
 }
 
 /**
@@ -79,6 +134,7 @@ function createUsageStore(filePath) {
       providerId: entry.providerId || null,
       providerType: entry.providerType || null,
       providerName: entry.providerName || null,
+      accountAlias: entry.accountAlias || null,
       status: entry.status || 0,
       stream: !!entry.stream,
       prompt_tokens: entry.prompt_tokens || 0,
@@ -140,13 +196,21 @@ function createUsageStore(filePath) {
       m.cached_tokens += e.cached_tokens || 0;
       byModel.set(mk, m);
 
-      const pk = e.providerName || e.providerType || e.providerId || "unknown";
+      const pk = providerAggregateKey(e);
       const p = byProvider.get(pk) || {
-        provider: pk,
+        provider: providerAggregateLabel(e),
+        providerId: e.providerId || null,
+        providerType: canonicalProviderType(e.providerType) || null,
+        providerName: isInternalProviderName(e.providerName) ? null : e.providerName,
+        accountAlias: e.accountAlias || null,
         requests: 0,
         prompt_tokens: 0,
         completion_tokens: 0,
       };
+      if (!p.providerType && e.providerType) p.providerType = canonicalProviderType(e.providerType);
+      if (!p.providerName && !isInternalProviderName(e.providerName)) p.providerName = e.providerName;
+      if (!p.accountAlias && e.accountAlias) p.accountAlias = e.accountAlias;
+      p.provider = providerAggregateLabel(p);
       p.requests++;
       p.prompt_tokens += e.prompt_tokens || 0;
       p.completion_tokens += e.completion_tokens || 0;
@@ -178,4 +242,11 @@ function createUsageStore(filePath) {
   return { record, recent, aggregate, extractUsage, totalsAllTime, PERIODS };
 }
 
-module.exports = { createUsageStore, extractUsage, PERIODS };
+module.exports = {
+  createUsageStore,
+  extractUsage,
+  hydrateUsageIdentity,
+  providerAggregateKey,
+  providerAggregateLabel,
+  PERIODS,
+};

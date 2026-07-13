@@ -6,7 +6,9 @@ const { generateApiKey, generateId } = require("./password");
 const { DEFAULT_PORT, OAUTH, RETIRED_OAUTH_MODELS } = require("./constants");
 const { ensureUniqueComboNames, providerRouteIds } = require("./combos");
 
-const CONFIG_VERSION = 5;
+const CONFIG_VERSION = 6;
+const COMBO_NAME_MIGRATION_VERSION = 5;
+const XAI_LOCK_RESET_VERSION = 6;
 const OAUTH_ALIAS_RE = /^oauth([1-9]\d*)$/;
 
 function canonicalProviderType(type) {
@@ -19,6 +21,11 @@ function isOAuthProvider(provider) {
 }
 
 function ensureOAuthAliases(providers, counters = {}) {
+  for (const family of Object.keys(counters)) {
+    const value = Math.floor(Number(counters[family]));
+    counters[family] = Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
   const groups = new Map();
   for (const provider of providers || []) {
     if (!isOAuthProvider(provider)) continue;
@@ -38,6 +45,7 @@ function ensureOAuthAliases(providers, counters = {}) {
         return idDiff || a.index - b.index;
       });
     const used = new Set();
+    let highWater = Number(counters[family]) || 0;
 
     for (const { provider } of ordered) {
       const match = OAUTH_ALIAS_RE.exec(String(provider.accountAlias || ""));
@@ -45,22 +53,20 @@ function ensureOAuthAliases(providers, counters = {}) {
         delete provider.accountAlias;
         continue;
       }
-      used.add(Number(match[1]));
+      const account = Number(match[1]);
+      used.add(account);
+      highWater = Math.max(highWater, account);
     }
 
-    let next = 1;
     for (const { provider } of ordered) {
       if (provider.accountAlias) continue;
-      while (used.has(next)) next += 1;
-      provider.accountAlias = `oauth${next}`;
-      used.add(next);
-      next += 1;
+      do {
+        highWater += 1;
+      } while (used.has(highWater));
+      provider.accountAlias = `oauth${highWater}`;
+      used.add(highWater);
     }
-    counters[family] = Math.max(...used, 0);
-  }
-
-  for (const family of Object.keys(counters)) {
-    if (!groups.has(family)) delete counters[family];
+    counters[family] = highWater;
   }
   return counters;
 }
@@ -132,7 +138,9 @@ function defaultConfig() {
 
 function migrate(cfg) {
   if (!cfg || typeof cfg !== "object") return defaultConfig();
-  const needsComboNameMigration = (Number(cfg.version) || 1) < CONFIG_VERSION;
+  const sourceVersion = Number(cfg.version) || 1;
+  const needsComboNameMigration = sourceVersion < COMBO_NAME_MIGRATION_VERSION;
+  const needsXaiLockReset = sourceVersion < XAI_LOCK_RESET_VERSION;
 
   if (!Array.isArray(cfg.providers)) cfg.providers = [];
 
@@ -159,6 +167,9 @@ function migrate(cfg) {
 
   for (const p of cfg.providers || []) {
     normalizeModelLocks(p);
+    if (needsXaiLockReset && canonicalProviderType(p.type) === "xai") {
+      p.modelLocks = {};
+    }
     if (!Array.isArray(p.models)) p.models = [];
     p.models = p.models.map((m) => {
       if (typeof m === "string") return { id: m, name: m, enabled: true };

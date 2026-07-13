@@ -71,9 +71,9 @@ The router supports:
 - `fallback`: members are attempted in their configured order.
 - `round-robin`: each request rotates the starting member, then retains fallback behavior through the remaining members.
 
-Timeouts, `408`, `429`, and `5xx` responses are retryable. The per-member timeout defaults to 60 seconds. A route stops when a member returns a non-retryable failure; a single direct model stops after its only member.
+Timeouts, `408`, `429`, and `5xx` responses are retryable. The per-member timeout defaults to 60 seconds. An explicit route stops immediately when any account or member returns a non-retryable failure; a later account lock cannot replace that terminal response.
 
-OAuth providers add an account-pool layer beneath model routing. Accounts receive the lowest available alias (`oauth1`, `oauth2`, ...), and both shared ids (`chatgpt/gpt-5.4`) and account-specific ids (`chatgpt/oauth2/gpt-5.4`) can continue through sibling accounts. Quota failures create an account-wide lock using provider reset hints when available; authentication and transient failures use shorter model-scoped cooldowns. Early streaming quota events are inspected before the client stream starts so fallback can still occur. Selection, failure, fallback, locked-account skips, and terminal exhaustion are written as structured logs.
+OAuth providers add an account-pool layer beneath model routing. Accounts receive monotonic, never-reused aliases (`oauth1`, `oauth2`, ...). Model discovery advertises one canonical pooled id such as `chatgpt/gpt-5.4`; account-qualified ids such as `chatgpt/oauth2/gpt-5.4` and legacy stored-account ids remain resolvable but are not advertised. Quota failures create an account-wide lock using provider reset hints when available; authentication and transient failures use shorter model-scoped cooldowns. Early streaming quota events are inspected before the client stream starts so fallback can still occur. Selection, failure, fallback, locked-account skips, and terminal exhaustion are written as structured logs.
 
 ## Provider adapters
 
@@ -83,7 +83,7 @@ OAuth providers add an account-pool layer beneath model routing. Accounts receiv
 - `chatgpt.js` translates chat-completion requests to the ChatGPT Codex Responses surface and normalizes Responses SSE.
 - `claude.js` translates OpenAI messages and tools to Anthropic Messages, applies the current OAuth client contract, and converts JSON/SSE back to OpenAI shapes.
 - `antigravity.js` translates Gemini-style upstream requests and SSE.
-- `xai.js` uses an OpenAI-compatible chat surface with xAI OAuth credentials.
+- `xai.js` translates chat-completion requests to the xAI subscription Responses surface and normalizes its forced SSE stream.
 
 OAuth access-token refreshes are persisted back to the provider record when an adapter returns updated tokens.
 

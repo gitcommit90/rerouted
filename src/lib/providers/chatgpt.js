@@ -52,6 +52,7 @@ function toResponsesBody(body, model, stream) {
 
 function fromResponsesJson(data, model) {
   let text = "";
+  const toolCalls = [];
   const output = data.output || data.choices || [];
   if (typeof data.output_text === "string") text = data.output_text;
   else {
@@ -60,9 +61,17 @@ function fromResponsesJson(data, model) {
         for (const c of item.content) {
           if (c.type === "output_text" || c.type === "text") text += c.text || "";
         }
+      } else if (item.type === "function_call" && item.name) {
+        toolCalls.push({
+          id: item.call_id || item.id,
+          type: "function",
+          function: { name: item.name, arguments: item.arguments || "" },
+        });
       }
     }
   }
+  const message = { role: "assistant", content: text || null };
+  if (toolCalls.length) message.tool_calls = toolCalls;
   return {
     id: data.id || `chatcmpl-${Date.now()}`,
     object: "chat.completion",
@@ -71,10 +80,29 @@ function fromResponsesJson(data, model) {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: text },
-        finish_reason: "stop",
+        message,
+        finish_reason: toolCalls.length ? "tool_calls" : "stop",
       },
     ],
+    ...(data.usage ? { usage: normalizeResponsesUsage(data.usage) } : {}),
+  };
+}
+
+function normalizeResponsesUsage(usage) {
+  if (!usage || typeof usage !== "object") return undefined;
+  const promptTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
+  const completionTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: usage.total_tokens ?? promptTokens + completionTokens,
+    ...(usage.input_tokens_details?.cached_tokens != null
+      ? {
+          prompt_tokens_details: {
+            cached_tokens: usage.input_tokens_details.cached_tokens,
+          },
+        }
+      : {}),
   };
 }
 
@@ -87,9 +115,38 @@ async function pipeResponsesSse(upstreamBody, res, model, { collect = false } = 
   const id = `chatcmpl-${Date.now()}`;
   let roleSent = false;
   let collected = "";
+  let collectedUsage;
+  const toolCalls = [];
+  const toolIndexes = new Map();
 
   function writeChunk(obj) {
     if (!collect && res) res.write(formatSseData(obj));
+  }
+
+  function ensureRole() {
+    if (roleSent) return;
+    writeChunk(openaiChunk({ id, model, role: "assistant", content: "" }));
+    roleSent = true;
+  }
+
+  function toolIndexFor(data, item) {
+    const keys = [
+      item?.call_id,
+      item?.id,
+      data.item_id,
+      `output:${data.output_index ?? 0}`,
+    ].filter(Boolean);
+    let index = keys.map((key) => toolIndexes.get(key)).find((value) => value !== undefined);
+    if (index === undefined) {
+      index = toolCalls.length;
+      toolCalls.push({
+        id: item?.call_id || item?.id || data.item_id,
+        type: "function",
+        function: { name: item?.name || "", arguments: "" },
+      });
+    }
+    for (const key of keys) toolIndexes.set(key, index);
+    return index;
   }
 
   async function handleEvents(events) {
@@ -102,12 +159,71 @@ async function pipeResponsesSse(upstreamBody, res, model, { collect = false } = 
         continue;
       }
       const type = data.type || ev.event;
-      if (type === "error" || data.error) {
-        const upstream = data.error && typeof data.error === "object" ? data.error : data;
+      if (type === "error" || type === "response.failed" || data.error || data.response?.error) {
+        const upstream =
+          data.error && typeof data.error === "object"
+            ? data.error
+            : data.response?.error && typeof data.response.error === "object"
+              ? data.response.error
+              : data.error || data.response?.error || data;
         throw new Error(
-          upstream.message || upstream.code || upstream.type || "Codex stream failed"
+          typeof upstream === "string"
+            ? upstream
+            : upstream.message || upstream.code || upstream.type || "Upstream Responses stream failed"
         );
       }
+
+      const item = data.item || data.output_item;
+      if (
+        (type === "response.output_item.added" || type === "response.output_item.done") &&
+        item?.type === "function_call" &&
+        item.name
+      ) {
+        const index = toolIndexFor(data, item);
+        const current = toolCalls[index];
+        current.id ||= item.call_id || item.id;
+        current.function.name ||= item.name;
+        if (!current.function.arguments && item.arguments) {
+          current.function.arguments = item.arguments;
+        }
+        if (type === "response.output_item.added") {
+          ensureRole();
+          writeChunk(
+            openaiChunk({
+              id,
+              model,
+              tool_calls: [
+                {
+                  index,
+                  id: current.id,
+                  type: "function",
+                  function: { name: current.function.name, arguments: "" },
+                },
+              ],
+            })
+          );
+        }
+      } else if (type === "response.function_call_arguments.delta") {
+        const index = toolIndexFor(data, item);
+        const delta = typeof data.delta === "string" ? data.delta : "";
+        toolCalls[index].function.arguments += delta;
+        if (delta) {
+          ensureRole();
+          writeChunk(
+            openaiChunk({
+              id,
+              model,
+              tool_calls: [{ index, function: { arguments: delta } }],
+            })
+          );
+        }
+      } else if (type === "response.function_call_arguments.done") {
+        const index = toolIndexFor(data, item);
+        if (!toolCalls[index].function.arguments && typeof data.arguments === "string") {
+          toolCalls[index].function.arguments = data.arguments;
+        }
+      }
+
       let delta = "";
       if (type === "response.output_text.delta" && typeof data.delta === "string") delta = data.delta;
       else if (type === "response.output_text.delta" && data.delta?.text) delta = data.delta.text;
@@ -117,18 +233,27 @@ async function pipeResponsesSse(upstreamBody, res, model, { collect = false } = 
         for (const c of data.delta.content) {
           if (c.type === "output_text" || c.type === "text") delta += c.text || "";
         }
-      } else if (typeof data.delta === "string") delta = data.delta;
+      } else if (
+        type !== "response.function_call_arguments.delta" &&
+        typeof data.delta === "string"
+      ) {
+        delta = data.delta;
+      }
 
       if (delta) {
         collected += delta;
-        if (!roleSent) {
-          writeChunk(openaiChunk({ id, model, role: "assistant", content: "" }));
-          roleSent = true;
-        }
+        ensureRole();
         writeChunk(openaiChunk({ id, model, content: delta }));
       }
       if (type === "response.completed" || type === "response.done") {
-        writeChunk(openaiChunk({ id, model, finishReason: "stop" }));
+        collectedUsage = normalizeResponsesUsage(data.response?.usage || data.usage);
+        const finalChunk = openaiChunk({
+          id,
+          model,
+          finishReason: toolCalls.length ? "tool_calls" : "stop",
+        });
+        if (collectedUsage) finalChunk.usage = collectedUsage;
+        writeChunk(finalChunk);
       }
     }
   }
@@ -153,18 +278,25 @@ async function pipeResponsesSse(upstreamBody, res, model, { collect = false } = 
   }
 
   if (collect) {
+    const message = { role: "assistant", content: collected || null };
+    if (toolCalls.length) message.tool_calls = toolCalls;
     return {
       id,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model,
       choices: [
-        { index: 0, message: { role: "assistant", content: collected }, finish_reason: "stop" },
+        {
+          index: 0,
+          message,
+          finish_reason: toolCalls.length ? "tool_calls" : "stop",
+        },
       ],
+      ...(collectedUsage ? { usage: collectedUsage } : {}),
     };
   }
   if (res) res.write(SSE_DONE);
-  return null;
+  return collectedUsage || null;
 }
 
 async function refreshToken(provider, { fetchImpl = fetch } = {}) {
@@ -238,5 +370,6 @@ module.exports = {
   toResponsesBody,
   fromResponsesJson,
   pipeResponsesSse,
+  normalizeResponsesUsage,
   cfg,
 };

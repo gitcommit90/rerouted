@@ -69,4 +69,44 @@ describe("OAuth catalog migration", () => {
       ["gpt-5.3-codex", "grok-3"]
     );
   });
+
+  it("clears pre-fix xAI locks once without clearing other providers or future xAI locks", () => {
+    const oldLock = {
+      until: Date.now() + 60_000,
+      status: 429,
+      kind: "quota",
+      reason: "usage limit reached",
+    };
+    const migrated = migrate({
+      version: 5,
+      providers: [
+        { id: "prov_xai", type: "xai", models: [], modelLocks: { "*": oldLock } },
+        { id: "prov_claude", type: "claude", models: [], modelLocks: { "*": oldLock } },
+      ],
+      combos: [],
+    });
+
+    assert.equal(migrated.version, 6);
+    assert.deepEqual(migrated.providers[0].modelLocks, {});
+    assert.deepEqual(migrated.providers[1].modelLocks, { "*": oldLock });
+
+    const newLock = { ...oldLock, reason: "new transport response" };
+    migrated.providers[0].modelLocks = { "*": newLock };
+    assert.deepEqual(migrate(migrated).providers[0].modelLocks, { "*": newLock });
+  });
+
+  it("preserves alias high-water marks after every account is removed", () => {
+    const cfg = migrate({
+      version: 6,
+      providers: [],
+      providerAliasCounters: { xai: 7 },
+      combos: [],
+    });
+    assert.equal(cfg.providerAliasCounters.xai, 7);
+
+    cfg.providers.push({ id: "prov_new", type: "xai", models: [] });
+    const next = migrate(cfg);
+    assert.equal(next.providers[0].accountAlias, "oauth8");
+    assert.equal(next.providerAliasCounters.xai, 8);
+  });
 });

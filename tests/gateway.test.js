@@ -715,7 +715,7 @@ describe("format translation", () => {
     });
   });
 
-  it("xAI passes OpenAI effort through and omits it for Grok Composer", async () => {
+  it("xAI maps explicit effort to Responses and omits it for Grok Composer", async () => {
     const payloads = [];
     const fetchImpl = async (_url, opts) => {
       payloads.push(JSON.parse(opts.body));
@@ -736,10 +736,11 @@ describe("format translation", () => {
       fetchImpl,
     });
 
-    assert.equal(payloads[0].reasoning_effort, "medium");
-    assert.equal(payloads[0].reasoning, undefined);
-    assert.equal(payloads[1].reasoning_effort, undefined);
+    assert.equal(payloads[0].model, "grok-4.5");
+    assert.equal(payloads[0].reasoning.effort, "medium");
+    assert.equal(payloads[0].reasoning_effort, undefined);
     assert.equal(payloads[1].reasoning, undefined);
+    assert.equal(payloads[1].reasoning_effort, undefined);
   });
 
   it("OpenAI-compatible providers preserve reasoning_effort", async () => {
@@ -757,6 +758,44 @@ describe("format translation", () => {
       }
     );
     assert.equal(payload.reasoning_effort, "high");
+  });
+
+  it("GLM Coding uses its documented endpoint and preserves native thinking state", async () => {
+    const requests = [];
+    const provider = {
+      type: "glm",
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+      apiKey: "glm-key",
+    };
+    await openaiCompat.chat(provider, {
+      model: "glm-5.2",
+      body: {
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            reasoning_content: "Prior reasoning",
+          },
+        ],
+        thinking: { type: "enabled", clear_thinking: false },
+      },
+      stream: true,
+      fetchImpl: async (url, options) => {
+        requests.push({ url, payload: JSON.parse(options.body) });
+        return new Response("", { status: 200 });
+      },
+    });
+
+    assert.equal(
+      requests[0].url,
+      "https://api.z.ai/api/coding/paas/v4/chat/completions"
+    );
+    assert.deepEqual(requests[0].payload.thinking, {
+      type: "enabled",
+      clear_thinking: false,
+    });
+    assert.equal(requests[0].payload.reasoning_effort, undefined);
+    assert.equal(requests[0].payload.messages[0].reasoning_content, "Prior reasoning");
   });
 });
 
@@ -1041,6 +1080,58 @@ describe("usage store", () => {
     // recent list for home
     assert.equal(u.recent(10).length, 2);
   });
+
+  it("keeps same-provider accounts separate and hydrates legacy identities without internal ids", () => {
+    const { createUsageStore, hydrateUsageIdentity } = require("../src/lib/usage");
+    const p = path.join(os.tmpdir(), `rr-usage-accounts-${Date.now()}.json`);
+    const u = createUsageStore(p);
+    u.record({
+      model: "general",
+      providerId: "prov_a",
+      providerType: "xai",
+      providerName: "xAI (Grok)",
+      accountAlias: "oauth1",
+      status: 200,
+    });
+    u.record({
+      model: "general",
+      providerId: "prov_b",
+      providerType: "xai",
+      providerName: "xAI (Grok)",
+      accountAlias: "oauth2",
+      status: 429,
+    });
+
+    const agg = u.aggregate("all");
+    assert.deepEqual(
+      agg.byProvider.map((row) => row.provider).sort(),
+      ["xAI (Grok) · oauth1", "xAI (Grok) · oauth2"]
+    );
+    assert.deepEqual(
+      agg.recent.map((row) => row.accountAlias),
+      ["oauth2", "oauth1"]
+    );
+
+    const connected = hydrateUsageIdentity(
+      { providerId: "prov_c393df0dd896", status: 404, provider: "prov_c393df0dd896" },
+      [{ id: "prov_c393df0dd896", type: "claude", name: "prov_c393df0dd896", accountAlias: "oauth4" }]
+    );
+    assert.equal(connected.providerName, "Claude");
+    assert.equal(connected.provider, "Claude · oauth4");
+    assert.equal(Object.hasOwn(connected, "providerId"), false);
+    assert.doesNotMatch(JSON.stringify(connected), /prov_/);
+
+    const disconnected = hydrateUsageIdentity(
+      { providerId: "prov_deleted", status: 404, provider: "prov_deleted" },
+      []
+    );
+    assert.equal(disconnected.providerName, "Disconnected account");
+    assert.equal(disconnected.provider, "Disconnected account");
+    assert.doesNotMatch(JSON.stringify(disconnected), /prov_/);
+
+    const local = hydrateUsageIdentity({ model: "missing", status: 404 }, []);
+    assert.equal(local.providerName, "Local route");
+  });
 });
 
 describe("timeout advances fallback", () => {
@@ -1217,10 +1308,10 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
   it("pipeAnthropicSseToOpenAi emits OpenAI chunks", async () => {
     const { Readable } = require("node:stream");
     const events = [
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"m1"}}\n\n',
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":7,"output_tokens":0,"cache_read_input_tokens":2}}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
     ];
     const body = Readable.from(events);
     const chunks = [];
@@ -1229,7 +1320,7 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
         chunks.push(s);
       },
     };
-    await claude.pipeAnthropicSseToOpenAi(body, res, "claude-test");
+    const usage = await claude.pipeAnthropicSseToOpenAi(body, res, "claude-test");
     const joined = chunks.join("");
     assert.ok(joined.includes("chat.completion.chunk"));
     assert.ok(joined.includes("Hel") || joined.includes("Hello"));
@@ -1237,6 +1328,12 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
     // parse a data line
     const dataLine = chunks.find((c) => c.includes('"content":"Hel"') || c.includes("Hel"));
     assert.ok(dataLine, "expected text delta chunk");
+    assert.deepEqual(usage, {
+      prompt_tokens: 7,
+      completion_tokens: 4,
+      cached_tokens: 2,
+      total_tokens: 11,
+    });
   });
 
   it("pipeResponsesSse collect builds chat completion", async () => {

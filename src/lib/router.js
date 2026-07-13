@@ -10,11 +10,12 @@ const {
 const claude = require("./providers/claude");
 const chatgpt = require("./providers/chatgpt");
 const antigravity = require("./providers/antigravity");
-const { REQUEST_TIMEOUT_MS } = require("./constants");
+const { REQUEST_TIMEOUT_MS, KEYED_PRESETS, OAUTH } = require("./constants");
 const { extractUsage } = require("./usage");
 const appLogger = require("./logger");
 const { canonicalProviderType, isOAuthProvider, getActiveModelLock } = require("./store");
 const { publicComboId, comboMatchesId } = require("./combos");
+const { createSseParser } = require("./sse");
 
 const COOLDOWN_MS = {
   quota: 60_000,
@@ -180,6 +181,18 @@ function orderMembers(resolved, rrState) {
 
 function isRetryableStatus(status) {
   return status === 401 || status === 403 || status === 408 || status === 429 || status >= 500;
+}
+
+function humanProviderName(attempt) {
+  const name = String(attempt?.providerName || "").trim();
+  if (name && !/^prov_/i.test(name)) return name;
+  const type = canonicalProviderType(attempt?.providerType);
+  return OAUTH[type]?.name || KEYED_PRESETS[type]?.name || type || "Disconnected account";
+}
+
+function attemptLabel(attempt) {
+  const provider = humanProviderName(attempt);
+  return attempt?.accountAlias ? `${provider} (${attempt.accountAlias})` : provider;
 }
 
 function errorMessageFromText(text, fallback = "") {
@@ -382,13 +395,25 @@ function parseSseError(text) {
 }
 
 async function pipeOpenAiCompatibleSse(upstreamBody, clientRes) {
-  if (!upstreamBody) return;
+  if (!upstreamBody) return null;
   const decoder = new TextDecoder();
+  const parser = createSseParser();
   let pending = "";
+  let streamUsage = null;
   const inspect = (chunk) => {
-    pending += decoder.decode(chunk, { stream: true });
+    const text = decoder.decode(chunk, { stream: true });
+    pending += text;
     const error = parseSseError(pending);
     if (error) throw new Error(error);
+    for (const event of parser.push(text)) {
+      if (event.data === "[DONE]") continue;
+      try {
+        const data = JSON.parse(event.data);
+        if (data?.usage) streamUsage = data.usage;
+      } catch {
+        /* passthrough streams may contain provider-specific non-JSON events */
+      }
+    }
     if (pending.length > 128 * 1024) pending = pending.slice(-64 * 1024);
   };
 
@@ -398,7 +423,7 @@ async function pipeOpenAiCompatibleSse(upstreamBody, clientRes) {
       clientRes.write(bytes);
       inspect(bytes);
     }
-    return;
+    return streamUsage;
   }
   if (upstreamBody.getReader) {
     const reader = upstreamBody.getReader();
@@ -409,6 +434,7 @@ async function pipeOpenAiCompatibleSse(upstreamBody, clientRes) {
       inspect(value);
     }
   }
+  return streamUsage;
 }
 
 function rebuildResponseWithPrelude(response, chunks, reader) {
@@ -564,7 +590,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
       (cfg.combos || []).map((combo) => publicComboId(combo).toLowerCase())
     );
     for (const prov of cfg.providers || []) {
-      if (prov.enabled === false) continue;
+      if (prov.enabled === false || isOAuthProvider(prov)) continue;
       data.push(
         ...listProviderModels(prov, { includeDisabled: false }).filter(
           (model) => !comboIds.has(String(model.id).toLowerCase())
@@ -715,19 +741,23 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
           streamPipe: async (clientRes) => {
             try {
               if (meta.translate === true || provider.type === "claude") {
-                await claude.pipeAnthropicSseToOpenAi(res.body, clientRes, upstreamModel);
+                return await claude.pipeAnthropicSseToOpenAi(
+                  res.body,
+                  clientRes,
+                  upstreamModel
+                );
               } else if (
                 meta.translate === "responses" ||
                 provider.type === "chatgpt" ||
                 provider.type === "codex"
               ) {
-                await chatgpt.pipeResponsesSse(res.body, clientRes, upstreamModel, {
+                return await chatgpt.pipeResponsesSse(res.body, clientRes, upstreamModel, {
                   collect: false,
                 });
               } else if (meta.translate === "gemini" || provider.type === "antigravity") {
-                await antigravity.pipeGeminiSse(res.body, clientRes, upstreamModel);
+                return await antigravity.pipeGeminiSse(res.body, clientRes, upstreamModel);
               } else {
-                await pipeOpenAiCompatibleSse(res.body, clientRes);
+                return await pipeOpenAiCompatibleSse(res.body, clientRes);
               }
             } catch (error) {
               if (!outerSignal?.aborted || bound.timedOut) {
@@ -857,7 +887,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
     let sawNonOAuthAttempt = false;
     let stoppedWithoutFallback = false;
 
-    for (const member of ordered) {
+    routeMembers: for (const member of ordered) {
       const accounts = member.accounts?.length ? member.accounts : [member.provider];
       for (let accountIndex = 0; accountIndex < accounts.length; accountIndex += 1) {
         const provider = accounts[accountIndex];
@@ -939,7 +969,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
         if (result.ok) {
           clearModelLock(provider.id, member.upstreamModel);
           const tokens = result.openAiJson ? extractUsage(result.openAiJson) : {};
-          recordEvent({
+          const usageEvent = {
             model: modelId,
             status: 200,
             providerId: result.providerId,
@@ -948,8 +978,31 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
             accountAlias: provider.accountAlias || null,
             upstream: result.model,
             stream,
-            ...tokens,
-          });
+          };
+          if (stream && result.streamPipe) {
+            const upstreamPipe = result.streamPipe;
+            result.streamPipe = async (clientRes) => {
+              try {
+                const streamUsage = await upstreamPipe(clientRes);
+                recordEvent({
+                  ...usageEvent,
+                  ...extractUsage(streamUsage ? { usage: streamUsage } : null),
+                });
+                return streamUsage;
+              } catch (error) {
+                recordEvent({
+                  ...usageEvent,
+                  status: signal?.aborted ? 499 : 502,
+                  error: signal?.aborted
+                    ? "Client disconnected"
+                    : error?.message || String(error),
+                });
+                throw error;
+              }
+            };
+          } else {
+            recordEvent({ ...usageEvent, ...tokens });
+          }
           return { ok: true, stream, accountAlias: provider.accountAlias || null, ...result };
         }
 
@@ -989,7 +1042,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
         fallbackFrom = failed;
         if (!result.fallbackEligible) {
           stoppedWithoutFallback = true;
-          break;
+          break routeMembers;
         }
       }
     }
@@ -997,8 +1050,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
     const last = errors[errors.length - 1] || { status: 502, error: "All providers failed" };
     const attemptsSummary = errors
       .map((attempt) => {
-        const account = attempt.accountAlias || attempt.providerName || attempt.providerId || "unknown";
-        return `${account} [${attempt.status || 502}]: ${attempt.error}`;
+        return `${attemptLabel(attempt)} [${attempt.status || 502}]: ${attempt.error}`;
       })
       .join("; ");
     const accountsExhausted =
@@ -1018,6 +1070,8 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
       error: terminalMessage,
       stream,
       providerId: last.providerId,
+      providerType: last.providerType || null,
+      providerName: humanProviderName(last),
       accountAlias: last.accountAlias || null,
       attempts: errors,
     });
@@ -1074,6 +1128,7 @@ module.exports = {
   orderMembers,
   isRetryableStatus,
   classifyFailure,
+  attemptLabel,
   parseResetHint,
   hasProductiveResponsesEvent,
   isAbortError,

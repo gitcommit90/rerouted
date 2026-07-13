@@ -19,11 +19,11 @@ const {
 const { createStore } = require("./lib/store");
 const { createRouter } = require("./lib/router");
 const { createGateway } = require("./lib/gateway");
-const { createUsageStore } = require("./lib/usage");
+const { createUsageStore, hydrateUsageIdentity } = require("./lib/usage");
 const logger = require("./lib/logger");
 const { hashPassword, verifyPassword, generateId, generateApiKey } = require("./lib/password");
 const { detectAll, summarizeDetected } = require("./lib/detect");
-const { startOAuth, completeOAuth, oauthStatus } = require("./lib/oauth");
+const { startOAuth, completeOAuth, oauthStatus, clearPending } = require("./lib/oauth");
 const { createQuotaService } = require("./lib/quota");
 const { createSessionAuth, isMacSessionActive } = require("./lib/session-auth");
 const { runProviderModelTest } = require("./lib/model-test");
@@ -256,29 +256,33 @@ function updateTrayTitle() {
 
 // ─── IPC ───────────────────────────────────────────────────────────────
 function registerIpc() {
-  function publicStats(stats, combos) {
-    if (!stats) return stats;
+  function publicActivityEntry(entry, cfg) {
     return {
-      ...stats,
-      recent: (stats.recent || []).map((entry) => ({
-        ...entry,
-        model: publicRouteId(combos, entry.model),
-      })),
+      ...hydrateUsageIdentity(entry, cfg.providers),
+      model: publicRouteId(cfg.combos, entry.model),
     };
   }
 
-  function publicUsage(usage, combos) {
+  function publicStats(stats, cfg) {
+    if (!stats) return stats;
+    return {
+      ...stats,
+      recent: (stats.recent || []).map((entry) => publicActivityEntry(entry, cfg)),
+    };
+  }
+
+  function publicUsage(usage, cfg) {
     if (!usage) return usage;
     return {
       ...usage,
       byModel: (usage.byModel || []).map((entry) => ({
         ...entry,
-        model: publicRouteId(combos, entry.model),
+        model: publicRouteId(cfg.combos, entry.model),
       })),
-      recent: (usage.recent || []).map((entry) => ({
-        ...entry,
-        model: publicRouteId(combos, entry.model),
-      })),
+      byProvider: (usage.byProvider || []).map((entry) =>
+        hydrateUsageIdentity(entry, cfg.providers)
+      ),
+      recent: (usage.recent || []).map((entry) => publicActivityEntry(entry, cfg)),
     };
   }
 
@@ -341,8 +345,8 @@ function registerIpc() {
       serverListening: gateway.isListening(),
       providers: publicProviders,
       combos: (cfg.combos || []).map(publicCombo),
-      stats: publicStats(router.stats(), cfg.combos),
-      usage: publicUsage(router.usageAggregate("24h"), cfg.combos),
+      stats: publicStats(router.stats(), cfg),
+      usage: publicUsage(router.usageAggregate("24h"), cfg),
       unlocked: sessionAuth.isUnlocked(
         !!cfg.adminPasswordHash && cfg.adminPasswordHash !== "harness"
       ) || !!process.env.REROUTED_STATE,
@@ -482,6 +486,11 @@ function registerIpc() {
 
   ipcMain.handle("app:oauth-status", async (_e, type) => oauthStatus(type));
 
+  ipcMain.handle("app:oauth-cancel", async (_e, type) => {
+    clearPending(type);
+    return { ok: true };
+  });
+
   ipcMain.handle("app:oauth-complete", async (_e, { type, pasteCode, providerId }) => {
     try {
       logger.oauth(`UI requested OAuth complete for ${type}`, {
@@ -615,8 +624,8 @@ function registerIpc() {
     const cfg = store.load();
     return {
       ok: true,
-      usage: publicUsage(router.usageAggregate(period || "24h"), cfg.combos),
-      stats: publicStats(router.stats(), cfg.combos),
+      usage: publicUsage(router.usageAggregate(period || "24h"), cfg),
+      stats: publicStats(router.stats(), cfg),
     };
   });
 

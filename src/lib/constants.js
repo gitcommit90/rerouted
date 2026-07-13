@@ -119,7 +119,7 @@ const OAUTH = {
     codeChallengeMethod: "S256",
     loopbackPort: 56121,
     callbackPath: "/callback",
-    chatUrl: "https://api.x.ai/v1/chat/completions",
+    chatUrl: "https://cli-chat-proxy.grok.com/v1/responses",
     models: [
       { id: "grok-4.5-high", name: "Grok 4.5 (High)" },
       { id: "grok-4.5-medium", name: "Grok 4.5 (Medium)" },

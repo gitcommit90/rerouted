@@ -65,6 +65,7 @@ function extractTextFromGemini(data) {
 
 function fromGeminiJson(data, model) {
   const text = extractTextFromGemini(data);
+  const usage = data.usageMetadata || data.response?.usageMetadata;
   return {
     id: `chatcmpl-${Date.now()}`,
     object: "chat.completion",
@@ -73,6 +74,20 @@ function fromGeminiJson(data, model) {
     choices: [
       { index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" },
     ],
+    ...(usage
+      ? {
+          usage: {
+            prompt_tokens: usage.promptTokenCount || 0,
+            completion_tokens: usage.candidatesTokenCount || 0,
+            total_tokens:
+              usage.totalTokenCount ||
+              (usage.promptTokenCount || 0) + (usage.candidatesTokenCount || 0),
+            prompt_tokens_details: {
+              cached_tokens: usage.cachedContentTokenCount || 0,
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -80,6 +95,7 @@ async function pipeGeminiSse(upstreamBody, res, model) {
   const parser = createSseParser();
   const id = `chatcmpl-${Date.now()}`;
   let roleSent = false;
+  let streamUsage = null;
 
   async function handleEvents(events) {
     for (const ev of events) {
@@ -94,6 +110,19 @@ async function pipeGeminiSse(upstreamBody, res, model) {
         throw new Error(
           upstream.message || upstream.code || upstream.status || "Antigravity stream failed"
         );
+      }
+      const usage = data.usageMetadata || data.response?.usageMetadata;
+      if (usage) {
+        streamUsage = {
+          prompt_tokens: usage.promptTokenCount || 0,
+          completion_tokens: usage.candidatesTokenCount || 0,
+          total_tokens:
+            usage.totalTokenCount ||
+            (usage.promptTokenCount || 0) + (usage.candidatesTokenCount || 0),
+          prompt_tokens_details: {
+            cached_tokens: usage.cachedContentTokenCount || 0,
+          },
+        };
       }
       const text = extractTextFromGemini(data);
       // For incremental SSE, parts may only contain the delta in some APIs;
@@ -127,6 +156,7 @@ async function pipeGeminiSse(upstreamBody, res, model) {
   }
   res.write(formatSseData(openaiChunk({ id, model, finishReason: "stop" })));
   res.write(SSE_DONE);
+  return streamUsage;
 }
 
 async function refreshToken(provider, { fetchImpl = fetch } = {}) {

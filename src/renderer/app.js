@@ -10,6 +10,51 @@ let state = null;
 let page = "home";
 let toastTimer = null;
 let armDelete = null;
+let activeProviderPanel = null;
+
+function reducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+function revealPanel(panel, focusSelector = "[data-panel-heading]") {
+  requestAnimationFrame(() => {
+    if (!panel?.isConnected) return;
+    const focusTarget = panel.querySelector(focusSelector) || panel;
+    focusTarget.focus({ preventScroll: true });
+    panel.scrollIntoView({
+      behavior: reducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
+  });
+}
+
+function disposeProviderPanel({ restoreFocus = false, clear = true } = {}) {
+  const current = activeProviderPanel;
+  if (!current) return;
+  activeProviderPanel = null;
+  current.closed = true;
+  if (current.onDismiss) Promise.resolve(current.onDismiss()).catch(() => {});
+  if (clear && current.mount?.isConnected) current.mount.replaceChildren();
+  if (!restoreFocus) return;
+  requestAnimationFrame(() => {
+    const fallback = document.querySelector("#btn-connect");
+    const target = current.opener?.isConnected ? current.opener : fallback;
+    target?.focus({ preventScroll: true });
+  });
+}
+
+function activateProviderPanel({ mount, panel, opener, focusSelector, onDismiss }) {
+  const session = { mount, panel, opener, onDismiss, closed: false };
+  activeProviderPanel = session;
+  revealPanel(panel, focusSelector);
+  return session;
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !activeProviderPanel) return;
+  event.preventDefault();
+  disposeProviderPanel({ restoreFocus: true });
+});
 
 function toast(msg) {
   toastEl.hidden = false;
@@ -409,7 +454,15 @@ function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider add
           <div class="model-test-status" data-keyed-status hidden></div>
           <button type="button" class="btn btn-secondary btn-sm" data-keyed-copy-error hidden>Copy full error</button>
         </div>`;
-      requestAnimationFrame(() => form.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+      requestAnimationFrame(() => {
+        if (!form.isConnected) return;
+        const firstField = form.querySelector("[data-keyed-field]");
+        firstField?.focus({ preventScroll: true });
+        form.scrollIntoView({
+          behavior: reducedMotion() ? "auto" : "smooth",
+          block: "nearest",
+        });
+      });
 
       const field = (name) => $(`[data-keyed-field="${name}"]`, form);
       const testButton = $("[data-keyed-action='test']", form);
@@ -777,7 +830,38 @@ function tokenMeter(usage) {
     </div>`;
 }
 
-function renderHome() {
+function homeRequestKey(request) {
+  if (!request) return "";
+  return [
+    request.at,
+    request.model,
+    request.providerId,
+    request.providerName,
+    request.providerType,
+    request.status,
+  ].join("|");
+}
+
+function homeRecentHtml(recent) {
+  if (!recent.length) {
+    return `<div class="empty">No traffic yet. Point a client at the local endpoint to see routing decisions here.</div>`;
+  }
+  return recent
+    .slice(0, 15)
+    .map((request) => {
+      const via = request.providerName || request.providerType || "";
+      const tokens = (request.prompt_tokens || 0) + (request.completion_tokens || 0);
+      const tone = Number(request.status) >= 400 ? "error" : "route";
+      return `<div class="event-row">
+        <span class="event-dot ${tone}"></span>
+        <div class="event-main"><div class="event-title">${esc(friendlyRoute(request.model))}</div><div class="event-meta">${esc(via || "Local route")}${tokens ? ` · ${fmtNum(tokens)} tokens` : ""}${request.stream ? " · stream" : ""}</div></div>
+        <div class="event-time">${esc(fmtTime(request.at))}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+function homeValues() {
   const s = state.stats || { totalRequests: 0, recent: [] };
   const recent = s.recent || [];
   const online = state.serverListening && state.serverEnabled;
@@ -788,67 +872,104 @@ function renderHome() {
     Number(u24.total_tokens) ||
     Number(u24.prompt_tokens || 0) + Number(u24.completion_tokens || 0) + Number(u24.cached_tokens || 0);
   const errorRate = u24.requests ? Math.round(((u24.errors || 0) / u24.requests) * 100) : 0;
+  return { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate };
+}
+
+let homeLastRequestKey = "";
+
+function restartHomeRouteAnimation() {
+  const routeMap = view.querySelector("[data-home-route-map]");
+  if (!routeMap || reducedMotion()) return;
+  routeMap.classList.remove("is-animating");
+  void routeMap.offsetWidth;
+  routeMap.classList.add("is-animating");
+}
+
+function renderHome() {
+  const { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate } = homeValues();
+  homeLastRequestKey = homeRequestKey(last);
   view.innerHTML = `
+    <div data-home-root>
     ${pageHeader("Wayfinder", "Status", "One local endpoint. Every account and route behind it.")}
     <section class="hero-surface">
-      <div class="gateway-state"><span class="status-node ${online ? "" : "off"}"></span>${online ? "Gateway live" : "Gateway stopped"}</div>
-      <div class="hero-title">${esc(lastLabel)}</div>
-      <div class="hero-sub">${last ? `${esc(last.providerName || last.providerType || "ReRouted")} · ${esc(fmtTime(last.at))}` : "Traffic will appear here as soon as a client connects."}</div>
-      <div class="route-map" aria-hidden="true">
+      <div class="gateway-state"><span class="status-node ${online ? "" : "off"}" data-home-status-node></span><span data-home-gateway>${online ? "Gateway live" : "Gateway stopped"}</span></div>
+      <div class="hero-title" data-home-last-route>${esc(lastLabel)}</div>
+      <div class="hero-sub" data-home-last-meta>${last ? `${esc(last.providerName || last.providerType || "ReRouted")} · ${esc(fmtTime(last.at))}` : "Traffic will appear here as soon as a client connects."}</div>
+      <div class="route-map${reducedMotion() ? "" : " is-animating"}" data-home-route-map aria-hidden="true">
         <span class="route-source">A</span><span class="route-track"></span><span class="route-source">B</span><span class="route-track"></span><span class="route-destination">/v1</span>
       </div>
-      <div class="endpoint-row"><code>${esc(state.endpoint)}</code><button type="button" class="btn btn-secondary btn-sm" id="copy-url">Copy</button></div>
+      <div class="endpoint-row"><code data-home-endpoint>${esc(state.endpoint)}</code><button type="button" class="btn btn-secondary btn-sm" id="copy-url">Copy</button></div>
     </section>
     <div class="metric-ribbon">
-      <div class="metric"><div class="metric-value">${fmtNum(u24.requests || 0)}</div><div class="metric-label">Requests 24h</div></div>
-      <div class="metric"><div class="metric-value">${fmtNum(tokenTotal)}</div><div class="metric-label">Tokens 24h</div></div>
-      <div class="metric"><div class="metric-value">${errorRate}%</div><div class="metric-label">Error rate</div></div>
+      <div class="metric"><div class="metric-value" data-home-requests>${fmtNum(u24.requests || 0)}</div><div class="metric-label">Requests 24h</div></div>
+      <div class="metric"><div class="metric-value" data-home-tokens>${fmtNum(tokenTotal)}</div><div class="metric-label">Tokens 24h</div></div>
+      <div class="metric"><div class="metric-value" data-home-error-rate>${errorRate}%</div><div class="metric-label">Error rate</div></div>
     </div>
-    <details class="disclosure">
+    <details class="disclosure" data-home-credentials>
       <summary>Credentials and network</summary>
       <div class="disclosure-body">
         <div class="label">Gateway key</div>
         ${secretHtml(state.apiKey, "home-key")}
-        <div class="card-sub">${esc(state.listenHint || "")}</div>
+        <div class="card-sub" data-home-listen-hint>${esc(state.listenHint || "")}</div>
       </div>
     </details>
-    ${sectionHeader("Traffic now", `${fmtNum(s.totalRequests || 0)} all time`)}
-    <div class="group-list">
-      ${
-        recent.length
-          ? recent
-              .slice(0, 15)
-              .map((r) => {
-                const via = r.providerName || r.providerType || "";
-                const tokens = (r.prompt_tokens || 0) + (r.completion_tokens || 0);
-                const tone = Number(r.status) >= 400 ? "error" : "route";
-                return `<div class="event-row">
-                  <span class="event-dot ${tone}"></span>
-                  <div class="event-main"><div class="event-title">${esc(friendlyRoute(r.model))}</div><div class="event-meta">${esc(via || "Local route")}${tokens ? ` · ${fmtNum(tokens)} tokens` : ""}${r.stream ? " · stream" : ""}</div></div>
-                  <div class="event-time">${esc(fmtTime(r.at))}</div>
-                </div>`;
-              })
-              .join("")
-          : `<div class="empty">No traffic yet. Point a client at the local endpoint to see routing decisions here.</div>`
-      }
+    <div class="section-header"><div class="section-title">Traffic now</div><div class="section-meta" data-home-total>${esc(`${fmtNum(s.totalRequests || 0)} all time`)}</div></div>
+    <div class="group-list" data-home-recent>
+      ${homeRecentHtml(recent)}
+    </div>
     </div>
   `;
   $("#copy-url").onclick = () => copy(state.endpoint);
   wireSecrets();
 }
 
+function updateHome() {
+  const root = view.querySelector("[data-home-root]");
+  if (!root) return renderHome();
+  const { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate } = homeValues();
+  const nextRequestKey = homeRequestKey(last);
+  const hasNewRequest = !!nextRequestKey && nextRequestKey !== homeLastRequestKey;
+  homeLastRequestKey = nextRequestKey;
+
+  root.querySelector("[data-home-status-node]")?.classList.toggle("off", !online);
+  root.querySelector("[data-home-gateway]").textContent = online ? "Gateway live" : "Gateway stopped";
+  root.querySelector("[data-home-last-route]").textContent = lastLabel;
+  root.querySelector("[data-home-last-meta]").textContent = last
+    ? `${last.providerName || last.providerType || "ReRouted"} · ${fmtTime(last.at)}`
+    : "Traffic will appear here as soon as a client connects.";
+  root.querySelector("[data-home-endpoint]").textContent = state.endpoint;
+  root.querySelector("[data-home-requests]").textContent = fmtNum(u24.requests || 0);
+  root.querySelector("[data-home-tokens]").textContent = fmtNum(tokenTotal);
+  root.querySelector("[data-home-error-rate]").textContent = `${errorRate}%`;
+  root.querySelector("[data-home-total]").textContent = `${fmtNum(s.totalRequests || 0)} all time`;
+  root.querySelector("[data-home-listen-hint]").textContent = state.listenHint || "";
+  root.querySelector("[data-home-recent]").innerHTML = homeRecentHtml(recent);
+
+  const secret = root.querySelector('[data-secret-id="home-key"]');
+  if (secret && secret.dataset.secret !== state.apiKey) {
+    secret.dataset.secret = state.apiKey;
+    const shown = secret.dataset.shown === "1";
+    secret.querySelector(".secret-val").textContent = shown ? state.apiKey : maskSecret(state.apiKey);
+  }
+  if (hasNewRequest) restartHomeRouteAnimation();
+}
+
 const OAUTH_TYPES = new Set(["chatgpt", "codex", "claude", "antigravity", "xai"]);
 let expandedProviderId = null;
 
-function startOauthFlow({ type, providerId, onDone }) {
+function startOauthFlow({ type, providerId, onDone, opener }) {
   const panel = $("#add-panel") || $("#oauth-panel");
+  const restoreTarget = opener?.isConnected ? opener : activeProviderPanel?.opener;
+  disposeProviderPanel({ clear: true });
   const box = document.createElement("div");
   box.className = "action-panel";
+  box.setAttribute("role", "region");
+  box.setAttribute("aria-labelledby", "oauth-panel-title");
   const claudeHint =
     type === "claude"
       ? "After authorizing, paste the full localhost callback URL if the browser cannot return automatically."
       : "Most providers return automatically. Paste a code only if the provider shows one.";
-  box.innerHTML = `<div class="action-panel-head"><div class="eyebrow">${providerId ? "Reconnect" : "New account"}</div><div class="action-panel-title">${esc(providerLabel(type))}</div><div class="action-panel-sub">Opening a secure browser session. ${esc(claudeHint)}</div></div>
+  box.innerHTML = `<div class="action-panel-head"><div class="eyebrow">${providerId ? "Reconnect" : "New account"}</div><div class="action-panel-title" id="oauth-panel-title" data-panel-heading tabindex="-1">${esc(providerLabel(type))}</div><div class="action-panel-sub">Opening a secure browser session. ${esc(claudeHint)}</div></div>
     <div class="gateway-state"><span class="status-node"></span><span id="oauth-status-line">Starting OAuth…</span></div>
     <details class="disclosure" style="margin:10px 0 0">
       <summary>Having trouble?</summary>
@@ -860,20 +981,46 @@ function startOauthFlow({ type, providerId, onDone }) {
       <button type="button" class="btn btn-secondary btn-sm" id="btn-reopen-oauth">Open browser</button>
       <button type="button" class="btn btn-secondary btn-sm" id="btn-oauth-logs">Logs</button>
     </div>
-    <button type="button" class="btn btn-primary" id="btn-done-oauth">Finish connection</button>`;
+    <div class="btn-row">
+      <button type="button" class="btn btn-secondary" data-panel-cancel>Cancel</button>
+      <button type="button" class="btn btn-primary" id="btn-done-oauth">Finish connection</button>
+    </div>`;
   if (panel) {
     panel.innerHTML = "";
     panel.appendChild(box);
   } else {
     view.appendChild(box);
   }
+  const oauthStarts = new Set();
+  let panelSession;
+  panelSession = activateProviderPanel({
+    mount: panel || view,
+    panel: box,
+    opener: restoreTarget,
+    onDismiss: async () => {
+      if (panelSession.completed) return;
+      await Promise.allSettled([...oauthStarts]);
+      return api.invoke("app:oauth-cancel", type);
+    },
+  });
+  box.querySelector("[data-panel-cancel]").onclick = () => {
+    disposeProviderPanel({ restoreFocus: true });
+  };
 
   let lastAuthUrl = "";
   async function start() {
     const status = box.querySelector("#oauth-status-line");
     const disp = box.querySelector("#oauth-url-display");
     status.textContent = "Starting OAuth…";
-    const r = await api.invoke("app:oauth-start", type);
+    const startRequest = api.invoke("app:oauth-start", type);
+    oauthStarts.add(startRequest);
+    let r;
+    try {
+      r = await startRequest;
+    } finally {
+      oauthStarts.delete(startRequest);
+    }
+    if (panelSession.closed || !box.isConnected) return;
     if (!r?.ok) {
       status.textContent = r?.error || "OAuth start failed — see Logs";
       status.style.color = "var(--danger)";
@@ -886,7 +1033,9 @@ function startOauthFlow({ type, providerId, onDone }) {
       ? `Redirect: ${r.redirectUri || "—"} · after Authorize paste the full localhost callback URL`
       : `Redirect: ${r.redirectUri || "—"} · waiting for browser callback`;
   }
-  start().catch((e) => toast(e.message || "OAuth start failed"));
+  start().catch((e) => {
+    if (!panelSession.closed) toast(e.message || "OAuth start failed");
+  });
 
   box.querySelector("#btn-copy-oauth-url").onclick = () => {
     if (lastAuthUrl) copy(lastAuthUrl);
@@ -903,6 +1052,7 @@ function startOauthFlow({ type, providerId, onDone }) {
     try {
       const paste = box.querySelector("#paste-code-oauth").value.trim() || undefined;
       const r = await api.invoke("app:oauth-complete", { type, pasteCode: paste, providerId });
+      if (panelSession.closed || !box.isConnected) return;
       if (!r?.ok) {
         status.textContent = r?.error || "Failed — open Logs";
         toast(r?.error || "OAuth failed");
@@ -910,8 +1060,10 @@ function startOauthFlow({ type, providerId, onDone }) {
       }
       toast(r.account?.reauthed ? "Re-authorized" : "Connected");
       status.textContent = "Connected";
+      panelSession.completed = true;
       if (onDone) await onDone(r);
     } catch (e) {
+      if (panelSession.closed || !box.isConnected) return;
       status.textContent = e.message || "OAuth failed";
       toast(e.message || "OAuth failed");
     }
@@ -919,6 +1071,7 @@ function startOauthFlow({ type, providerId, onDone }) {
 }
 
 function renderProviders() {
+  disposeProviderPanel({ clear: false });
   const list = state.providers || [];
   view.innerHTML = `
     ${pageHeader("Sources", "Accounts", "Connect subscriptions and API keys, then choose exactly which models are available.", '<button type="button" class="btn btn-primary btn-sm" id="btn-connect">Connect</button>')}
@@ -1071,6 +1224,7 @@ function renderProviders() {
           await refresh();
           renderProviders();
         },
+        opener: btn,
       });
     };
   });
@@ -1096,16 +1250,24 @@ function renderProviders() {
     };
   });
   $("#btn-connect").onclick = () => {
+    const opener = $("#btn-connect");
+    const panel = $("#add-panel");
+    disposeProviderPanel({ clear: true });
     const listO = state.oauthProviders || [];
-    $("#add-panel").innerHTML = `
-      <div class="action-panel">
-        <div class="action-panel-head"><div class="eyebrow">New source</div><div class="action-panel-title">Connect an account</div><div class="action-panel-sub">Use a subscription login or bring an OpenAI-compatible API key.</div></div>
+    panel.innerHTML = `
+      <div class="action-panel" role="region" aria-labelledby="connect-panel-title">
+        <div class="action-panel-head"><div class="eyebrow">New source</div><div class="action-panel-title" id="connect-panel-title" data-panel-heading tabindex="-1">Connect an account</div><div class="action-panel-sub">Use a subscription login or bring an OpenAI-compatible API key.</div></div>
         <div class="provider-grid">
         ${listO.map((p) => `<button type="button" class="tile" data-type="${esc(p.id)}">${esc(p.name)}</button>`).join("")}
         </div>
         <button type="button" class="btn btn-secondary" id="btn-key">Connect an API key</button>
+        <button type="button" class="btn btn-ghost panel-cancel" data-panel-cancel>Cancel</button>
       </div>
       <div id="oauth-panel"></div>`;
+    activateProviderPanel({ mount: panel, panel: panel.querySelector(".action-panel"), opener });
+    panel.querySelector("[data-panel-cancel]").onclick = () => {
+      disposeProviderPanel({ restoreFocus: true });
+    };
     view.querySelectorAll("#add-panel .tile").forEach((btn) => {
       btn.onclick = () => {
         startOauthFlow({
@@ -1114,17 +1276,23 @@ function renderProviders() {
             await refresh();
             renderProviders();
           },
+          opener,
         });
       };
     });
     $("#btn-key").onclick = () => {
-      const panel = $("#add-panel");
       const presets = state.keyedPresets || [];
+      disposeProviderPanel({ clear: true });
       panel.innerHTML = `
-        <div class="action-panel">
-          <div class="action-panel-head"><div class="eyebrow">API source</div><div class="action-panel-title">Connect an API key</div><div class="action-panel-sub">Choose a preset or bring any OpenAI-compatible endpoint. ReRouted tests it before adding its models.</div></div>
+        <div class="action-panel" role="region" aria-labelledby="key-panel-title">
+          <div class="action-panel-head"><div class="eyebrow">API source</div><div class="action-panel-title" id="key-panel-title" data-panel-heading tabindex="-1">Connect an API key</div><div class="action-panel-sub">Choose a preset or bring any OpenAI-compatible endpoint. ReRouted tests it before adding its models.</div></div>
           ${keyedProviderPickerHtml(presets)}
+          <button type="button" class="btn btn-ghost panel-cancel" data-panel-cancel>Cancel</button>
         </div>`;
+      activateProviderPanel({ mount: panel, panel: panel.querySelector(".action-panel"), opener });
+      panel.querySelector("[data-panel-cancel]").onclick = () => {
+        disposeProviderPanel({ restoreFocus: true });
+      };
       bindKeyedProviderPicker(panel, {
         successMessage: "API source connected",
         onAdded: () => renderProviders(),
@@ -1788,6 +1956,7 @@ function renderSettings() {
 
 function render() {
   if (!state) return;
+  disposeProviderPanel({ clear: false });
   updateChrome();
   const onboarded = state.onboardingComplete;
   nav.hidden = !onboarded;
@@ -1825,7 +1994,10 @@ function render() {
     renderHome();
     startPoll(async () => {
       await refresh();
-      if (page === "home") renderHome();
+      if (page === "home") {
+        updateChrome();
+        updateHome();
+      }
     }, 2000);
   } else if (page === "providers") renderProviders();
   else if (page === "combos") renderCombos();
