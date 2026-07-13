@@ -16,7 +16,7 @@ body:
     id: version
     attributes:
       label: ReRouted version
-      placeholder: "For example: 0.4.2"
+      placeholder: "Shown in Settings under Application"
     validations:
       required: true
   - type: input

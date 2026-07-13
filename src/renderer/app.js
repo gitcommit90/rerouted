@@ -3,6 +3,7 @@
 const api = window.rerouted;
 const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
   window.ReroutedAccountIdentity;
+const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
@@ -798,13 +799,6 @@ function fmtTime(at) {
   } catch {
     return "";
   }
-}
-
-function fmtNum(n) {
-  const x = Number(n) || 0;
-  if (x >= 1_000_000) return (x / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
-  if (x >= 10_000) return (x / 1000).toFixed(1).replace(/\.0$/, "") + "k";
-  return x.toLocaleString();
 }
 
 function fmtRelativeTime(at) {
