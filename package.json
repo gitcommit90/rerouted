@@ -1,8 +1,8 @@
 {
   "name": "rerouted",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A macOS menu-bar router for accounts, models, and automatic fallback.",
-  "author": "Public Bytes",
+  "author": "gitcommit90",
   "homepage": "https://rerouted.dev",
   "repository": {
     "type": "git",
@@ -31,6 +31,6 @@
     "electron": "43.1.0"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   }
 }

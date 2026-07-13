@@ -38,12 +38,14 @@ function createGateway({
   /** Accept any enabled gateway API key (multi-key). */
   function validKeys(cfg) {
     const keys = new Set();
-    if (Array.isArray(cfg.apiKeys)) {
+    if (Array.isArray(cfg.apiKeys) && cfg.apiKeys.length) {
       for (const k of cfg.apiKeys) {
         if (k && k.enabled !== false && k.key) keys.add(String(k.key).trim());
       }
+    } else if (cfg.apiKey) {
+      // Legacy configurations are migrated to apiKeys on load.
+      keys.add(String(cfg.apiKey).trim());
     }
-    if (cfg.apiKey) keys.add(String(cfg.apiKey).trim());
     return keys;
   }
 

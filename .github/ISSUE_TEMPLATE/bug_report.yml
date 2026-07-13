@@ -1,0 +1,91 @@
+name: Bug report
+description: Report a reproducible ReRouted problem without exposing credentials or private data.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve ReRouted.
+
+        **Do not paste API keys, gateway keys, tokens, OAuth callback URLs or codes, cookies, raw `config.json`, email addresses, account IDs, private prompts, or full unreviewed logs.** Use placeholders and include only sanitized diagnostic excerpts.
+
+        For a suspected vulnerability, follow [SECURITY.md](https://github.com/gitcommit90/rerouted/blob/main/SECURITY.md) instead of filing a public report.
+  - type: input
+    id: version
+    attributes:
+      label: ReRouted version
+      placeholder: "For example: 0.4.2"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac
+      placeholder: "macOS 15.5, M2 MacBook Air"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client and request mode
+      description: Name the editor, agent, or script and whether the request was streaming.
+      placeholder: "Client name/version, streaming"
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider, authentication method, and model
+      description: Use generic account labels; do not include an email address or account ID.
+      placeholder: "Claude, OAuth, claude-sonnet model"
+    validations:
+      required: true
+  - type: dropdown
+    id: request_target
+    attributes:
+      label: Request target
+      options:
+        - Direct provider/model
+        - Named fallback route
+        - Named round-robin route
+        - Onboarding or account connection
+        - Application UI or settings
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the expected and actual behavior, including sanitized status codes or error text.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List the smallest safe sequence that reproduces the problem. Replace credentials and private request content with placeholders.
+      placeholder: |
+        1. Connect one provider using OAuth.
+        2. Create a route with ...
+        3. Send a sanitized request with ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Optional. Paste only the few relevant lines after reviewing and redacting them.
+      render: shell
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I tested the latest stable release and searched existing issues.
+          required: true
+        - label: I removed credentials, OAuth data, account identifiers, email addresses, private prompts, and other sensitive information.
+          required: true

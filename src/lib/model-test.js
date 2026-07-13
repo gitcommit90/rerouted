@@ -1,5 +1,15 @@
 "use strict";
 
+const { redactString } = require("./logger");
+
+const MAX_ERROR_BODY_LENGTH = 4096;
+
+function safeErrorBody(value, maxLength = MAX_ERROR_BODY_LENGTH) {
+  const body = redactString(value);
+  if (body.length <= maxLength) return body;
+  return `${body.slice(0, maxLength)}... [truncated ${body.length - maxLength} chars]`;
+}
+
 function hasErrorValue(value) {
   if (typeof value === "string") return value.trim().length > 0;
   if (value && typeof value === "object") return Object.keys(value).length > 0;
@@ -53,22 +63,26 @@ async function inspectModelTestResponse(response) {
   try {
     body = await response.text();
   } catch (error) {
-    body = error?.message || String(error);
+    body = safeErrorBody(error?.message || String(error));
     return { ok: false, status: response.status || null, body };
   }
 
   body = String(body || "");
   if (!response.ok) {
-    return { ok: false, status: response.status || null, body: body || response.statusText || "" };
+    return {
+      ok: false,
+      status: response.status || null,
+      body: safeErrorBody(body || response.statusText || ""),
+    };
   }
   if (bodyHasUpstreamError(body)) {
-    return { ok: false, status: response.status || 200, body };
+    return { ok: false, status: response.status || 200, body: safeErrorBody(body) };
   }
   return { ok: true, status: response.status || 200, body };
 }
 
 function logFailure(logger, label, status, body) {
-  logger?.error?.(`Model test failed for ${label}`, { status, body });
+  logger?.error?.(`Model test failed for ${label}`, { status, body: safeErrorBody(body) });
 }
 
 async function runProviderModelTest({ adapter, provider, model, onTokenRefresh, logger } = {}) {
@@ -99,15 +113,17 @@ async function runProviderModelTest({ adapter, provider, model, onTokenRefresh, 
     }
     return { ok: true };
   } catch (error) {
-    const message = error?.message || String(error);
+    const message = safeErrorBody(error?.message || String(error));
     logFailure(logger, label, error?.status || null, message);
     return { ok: false, error: `Model test failed: ${message}` };
   }
 }
 
 module.exports = {
+  MAX_ERROR_BODY_LENGTH,
   bodyHasUpstreamError,
   inspectModelTestResponse,
   payloadHasUpstreamError,
   runProviderModelTest,
+  safeErrorBody,
 };

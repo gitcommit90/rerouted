@@ -33,6 +33,57 @@ function generatePkce(verifierBytes = 32) {
   return { codeVerifier, codeChallenge, state };
 }
 
+function statesMatch(expected, actual) {
+  const left = Buffer.from(String(expected || ""));
+  const right = Buffer.from(String(actual || ""));
+  return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function callbackPathMatches(actualPath, expectedPath) {
+  const normalize = (value) => {
+    const path = String(value || "/");
+    return path.length > 1 ? path.replace(/\/+$/, "") : path;
+  };
+  return normalize(actualPath) === normalize(expectedPath);
+}
+
+function parseOAuthCallback(requestUrl, { baseUrl, callbackPath, expectedState } = {}) {
+  const url = new URL(requestUrl || "/", baseUrl || "http://127.0.0.1");
+  if (!callbackPathMatches(url.pathname, callbackPath)) {
+    return { ok: false, status: 404, error: "Not found" };
+  }
+
+  const code = url.searchParams.get("code") || "";
+  const state = url.searchParams.get("state") || "";
+  const providerError = url.searchParams.get("error") || "";
+  const errorDescription = url.searchParams.get("error_description") || "";
+  if (!code && !providerError) {
+    return { ok: false, status: 400, error: "Missing OAuth result" };
+  }
+  if (!statesMatch(expectedState, state)) {
+    return { ok: false, status: 400, error: "OAuth state mismatch. Start the connection again." };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    code,
+    state,
+    providerError,
+    errorDescription,
+    fullUrl: new URL(url.pathname + url.search, baseUrl || url.origin).toString(),
+  };
+}
+
 const pending = new Map();
 
 function getPending(type) {
@@ -88,54 +139,61 @@ function normalizeAuthCode(raw) {
   return { code: s, state: "" };
 }
 
-function startCallbackServer(port, callbackPath, onCode) {
+function callbackPage(result) {
+  const safeUrl = escapeHtml(result.fullUrl);
+  if (result.providerError) {
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ReRouted authorization</title></head><body style="font-family:system-ui;padding:2rem;max-width:36rem">
+      <h2>ReRouted</h2>
+      <p style="color:#b91c1c"><b>Authorization failed</b></p>
+      <p>${escapeHtml(result.errorDescription || result.providerError)}</p>
+      <p>Copy this URL and check Logs if it keeps failing:</p>
+      <pre style="white-space:pre-wrap;word-break:break-all;background:#f4f4f5;padding:12px;border-radius:8px">${safeUrl}</pre>
+      </body></html>`;
+  }
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ReRouted authorization</title></head><body style="font-family:system-ui;padding:2rem;max-width:36rem">
+    <h2>ReRouted - Authorization successful</h2>
+    <p>Return to ReRouted and click <b>Finish connection</b>.</p>
+    <p>If the app did not pick up the code automatically, copy this full URL and paste it there:</p>
+    <pre style="white-space:pre-wrap;word-break:break-all;background:#f4f4f5;padding:12px;border-radius:8px">${safeUrl}</pre>
+    </body></html>`;
+}
+
+function writeCallbackHtml(res, status, html) {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  });
+  res.end(html);
+}
+
+function startCallbackServer(port, callbackPath, expectedState, onCode) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       try {
-        const u = new URL(req.url || "/", `http://localhost:${port}`);
-        const code = u.searchParams.get("code");
-        const state = u.searchParams.get("state");
-        const error = u.searchParams.get("error");
-        const errorDescription = u.searchParams.get("error_description");
-        if (!code && !error) {
-          if (u.pathname !== callbackPath && u.pathname !== callbackPath.replace(/\/$/, "")) {
-            res.writeHead(404);
-            res.end("Not found");
-            return;
-          }
-        }
-        // Show the full callback URL so it can be pasted back into the app.
-        const fullUrl = `http://localhost:${port}${u.pathname}${u.search}`;
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        if (error) {
-          res.end(
-            `<!doctype html><html><body style="font-family:system-ui;padding:2rem;max-width:36rem">
-            <h2>ReRouted</h2>
-            <p style="color:#b91c1c"><b>Authorization failed</b></p>
-            <p>${String(errorDescription || error)}</p>
-            <p class="muted">Copy this URL and check Logs if it keeps failing:</p>
-            <pre style="white-space:pre-wrap;word-break:break-all;background:#f4f4f5;padding:12px;border-radius:8px">${fullUrl}</pre>
-            </body></html>`
+        const result = parseOAuthCallback(req.url, {
+          baseUrl: `http://localhost:${port}`,
+          callbackPath,
+          expectedState,
+        });
+        if (!result.ok) {
+          writeCallbackHtml(
+            res,
+            result.status,
+            `<!doctype html><html><body style="font-family:system-ui;padding:2rem"><h2>ReRouted</h2><p>${escapeHtml(result.error)}</p></body></html>`
           );
-        } else {
-          res.end(
-            `<!doctype html><html><body style="font-family:system-ui;padding:2rem;max-width:36rem">
-            <h2>ReRouted — Authorization successful</h2>
-            <p>Return to ReRouted and click <b>I'm done</b>.</p>
-            <p>If the app didn't pick up the code automatically, copy this full URL and paste it there:</p>
-            <pre style="white-space:pre-wrap;word-break:break-all;background:#f4f4f5;padding:12px;border-radius:8px">${fullUrl}</pre>
-            </body></html>`
-          );
+          return;
         }
+        writeCallbackHtml(res, 200, callbackPage(result));
         onCode({
-          code,
-          state,
-          error,
-          error_description: errorDescription,
+          code: result.code,
+          state: result.state,
+          error: result.providerError,
+          error_description: result.errorDescription,
         });
       } catch {
-        res.writeHead(500);
-        res.end("Error");
+        writeCallbackHtml(res, 500, "<!doctype html><html><body><p>OAuth callback error.</p></body></html>");
       }
     });
     server.on("error", reject);
@@ -144,28 +202,38 @@ function startCallbackServer(port, callbackPath, onCode) {
 }
 
 /** Prefer fixed port; on EADDRINUSE bind ephemeral and return actual port. */
-async function startCallbackServerFlexible(preferredPort, callbackPath, onCode) {
+async function startCallbackServerFlexible(preferredPort, callbackPath, expectedState, onCode) {
   try {
-    const server = await startCallbackServer(preferredPort, callbackPath, onCode);
+    const server = await startCallbackServer(preferredPort, callbackPath, expectedState, onCode);
     return { server, port: preferredPort };
   } catch {
     const server = await new Promise((resolve, reject) => {
       const s = http.createServer((req, res) => {
         try {
-          const u = new URL(req.url || "/", "http://127.0.0.1");
-          const code = u.searchParams.get("code");
-          const state = u.searchParams.get("state");
-          const error = u.searchParams.get("error");
-          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(
-            `<!doctype html><html><body style="font-family:system-ui;padding:2rem"><h2>ReRouted</h2><p>${
-              error ? "Authorization failed" : "Return to ReRouted and click I'm done."
-            }</p></body></html>`
-          );
-          onCode({ code, state, error });
+          const address = s.address();
+          const activePort = typeof address === "object" && address ? address.port : 0;
+          const result = parseOAuthCallback(req.url, {
+            baseUrl: `http://127.0.0.1:${activePort}`,
+            callbackPath,
+            expectedState,
+          });
+          if (!result.ok) {
+            writeCallbackHtml(
+              res,
+              result.status,
+              `<!doctype html><html><body style="font-family:system-ui;padding:2rem"><h2>ReRouted</h2><p>${escapeHtml(result.error)}</p></body></html>`
+            );
+            return;
+          }
+          writeCallbackHtml(res, 200, callbackPage(result));
+          onCode({
+            code: result.code,
+            state: result.state,
+            error: result.providerError,
+            error_description: result.errorDescription,
+          });
         } catch {
-          res.writeHead(500);
-          res.end("Error");
+          writeCallbackHtml(res, 500, "<!doctype html><html><body><p>OAuth callback error.</p></body></html>");
         }
       });
       s.on("error", reject);
@@ -285,7 +353,7 @@ async function startOAuth(type) {
     ...pkce,
     redirectUri: fixedRedirect,
     code: null,
-    pastedState: null,
+    callbackState: null,
     error: null,
     server: null,
     needsPaste: type === "claude" || type === "xai",
@@ -303,6 +371,7 @@ async function startOAuth(type) {
       const { server, port } = await startCallbackServerFlexible(
         preferredPort,
         callbackPath,
+        session.state,
         ({ code, state, error }) => {
           if (error) {
             session.error = error;
@@ -315,7 +384,7 @@ async function startOAuth(type) {
               hasState: !!state,
             });
           }
-          if (state) session.pastedState = state;
+          if (state) session.callbackState = state;
         }
       );
       session.server = server;
@@ -370,13 +439,12 @@ async function startOAuth(type) {
   if (type === "chatgpt") pending.set("codex", session);
   if (type === "codex") pending.set("chatgpt", session);
 
-  // Parse params for the log (so users can see each field)
+  // Keep enough diagnostic structure without persisting live OAuth values.
   let paramDump = {};
   try {
     const u = new URL(authUrl);
-    for (const [k, v] of u.searchParams) {
-      // don't dump full verifier-related secrets beyond challenge
-      paramDump[k] = v;
+    for (const [k] of u.searchParams) {
+      paramDump[k] = ["state", "nonce", "code_challenge"].includes(k) ? "[redacted]" : "[present]";
     }
   } catch {
     /* ignore */
@@ -385,11 +453,11 @@ async function startOAuth(type) {
   logger.oauth(`AUTHORIZE URL ready type=${type}`, {
     redirectUri: session.redirectUri,
     needsPaste: !!session.needsPaste,
-    authUrl,
+    authorizeOrigin: new URL(authUrl).origin,
     params: paramDump,
-    altAuthUrl: altAuthUrl || undefined,
+    hasAltAuthUrl: !!altAuthUrl,
   });
-  logger.info(`OAuth: open this URL for ${type}:\n${authUrl}`);
+  logger.info(`OAuth authorization URL prepared for ${type}`);
 
   return {
     authUrl,
@@ -407,23 +475,24 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
     pasteLen: pasteCode ? String(pasteCode).length : 0,
   });
   const session = pending.get(type) || pending.get(type === "codex" ? "chatgpt" : type);
-  if (!session && !pasteCode) {
-    logger.error("completeOAuth: no session and no paste code");
+  if (!session) {
+    logger.error("completeOAuth: no active session");
     throw new Error("No OAuth session in progress. Click the provider again.");
   }
 
   let code = session?.code;
-  let codeState = session?.pastedState || session?.state || "";
+  let returnedState = session?.callbackState || "";
   if (pasteCode) {
     const n = normalizeAuthCode(pasteCode);
     logger.oauth("paste code normalized", {
       rawLen: String(pasteCode).length,
       codeLen: n.code?.length || 0,
       stateLen: n.state?.length || 0,
-      codePrefix: (n.code || "").slice(0, 12),
     });
     code = n.code || code;
-    if (n.state) codeState = n.state;
+    // A manual value must carry its own state; never combine a pasted code
+    // with state captured from an earlier callback.
+    returnedState = n.state || "";
   }
   if (!code) {
     const msg = session?.error
@@ -432,11 +501,15 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
     logger.error(msg);
     throw new Error(msg);
   }
+  if (!statesMatch(session.state, returnedState)) {
+    logger.warn(`OAuth state validation failed for ${type}`);
+    throw new Error("OAuth state mismatch. Start the connection again and paste the full callback URL.");
+  }
 
   const t = type === "codex" ? "chatgpt" : type;
   logger.oauth(`exchanging tokens type=${t}`, {
     codeLen: code.length,
-    stateLen: (codeState || "").length,
+    stateValidated: true,
     redirectUri: session?.redirectUri,
   });
   let tokens;
@@ -487,7 +560,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
         // Keep the token payload field order stable for the upstream endpoint.
         const tokenPayload = {
           code,
-          state: codeState || session?.state || "",
+          state: session.state,
           grant_type: "authorization_code",
           client_id: c.clientId,
           redirect_uri: ru,
@@ -497,7 +570,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
           tokenUrl,
           redirect_uri: ru,
           hasCode: !!code,
-          hasState: !!(codeState || session?.state),
+          hasState: true,
           hasVerifier: !!session?.codeVerifier,
         });
         const res = await fetchImpl(tokenUrl, {
@@ -731,6 +804,9 @@ module.exports = {
   clearPending,
   buildAuthUrl,
   normalizeAuthCode,
+  statesMatch,
+  parseOAuthCallback,
+  escapeHtml,
   fetchClaudeProfile,
   backfillClaudeProfiles,
 };
