@@ -64,6 +64,17 @@ function successResponse(content = "ok") {
   );
 }
 
+function responsesSuccessResponse(content = "ok") {
+  return new Response(
+    [
+      `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: content })}`,
+      `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed" })}`,
+      "",
+    ].join("\n\n"),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+}
+
 function authToken(options) {
   return String(options?.headers?.Authorization || "").replace(/^Bearer\s+/i, "");
 }
@@ -80,7 +91,7 @@ async function withGateway(store, router, callback) {
 }
 
 describe("same-provider OAuth account fallback", () => {
-  it("assigns stable oauth aliases and exposes direct plus shared model ids", () => {
+  it("assigns monotonic oauth aliases and advertises only shared model ids", () => {
     const configPath = tmpConfig();
     const store = createStore(configPath);
     store.seed({
@@ -100,9 +111,9 @@ describe("same-provider OAuth account fallback", () => {
     assert.equal(cfg.providers.find((p) => p.id === "prov_c").accountAlias, "oauth3");
 
     let ids = createRouter({ store, logger: captureLogger() }).listModels().data.map((model) => model.id);
-    assert.ok(ids.includes("xai/oauth1/grok-4.5"));
-    assert.ok(ids.includes("xai/oauth2/grok-4.5"));
-    assert.ok(ids.includes("xai/grok-4.5"));
+    assert.deepEqual(ids.filter((id) => id.endsWith("/grok-4.5")), ["xai/grok-4.5"]);
+    assert.equal(resolveSingle(store.load(), "xai/oauth1/grok-4.5").provider.id, "prov_a");
+    assert.equal(resolveSingle(store.load(), "xai/oauth2/grok-4.5").provider.id, "prov_b");
 
     store.update((next) => {
       next.providers = next.providers.filter((provider) => provider.id !== "prov_a");
@@ -111,10 +122,10 @@ describe("same-provider OAuth account fallback", () => {
     cfg = store.load();
     assert.equal(cfg.providers.find((p) => p.id === "prov_b").accountAlias, "oauth2");
     assert.equal(cfg.providers.find((p) => p.id === "prov_c").accountAlias, "oauth3");
-    assert.equal(cfg.providers.find((p) => p.id === "prov_d").accountAlias, "oauth1");
+    assert.equal(cfg.providers.find((p) => p.id === "prov_d").accountAlias, "oauth4");
     ids = createRouter({ store, logger: captureLogger() }).listModels().data.map((model) => model.id);
-    assert.ok(ids.includes("xai/oauth1/grok-4.5"));
-    assert.ok(!ids.includes("xai/oauth4/grok-4.5"));
+    assert.deepEqual(ids.filter((id) => id.endsWith("/grok-4.5")), ["xai/grok-4.5"]);
+    assert.equal(resolveSingle(store.load(), "xai/oauth4/grok-4.5").provider.id, "prov_d");
 
     store.update((next) => {
       next.providers = next.providers.filter((provider) => provider.type !== "xai");
@@ -122,7 +133,8 @@ describe("same-provider OAuth account fallback", () => {
     store.update((next) => {
       next.providers.push(oauthAccount("prov_e", "token-e", 500));
     });
-    assert.equal(store.load().providers.find((p) => p.id === "prov_e").accountAlias, "oauth1");
+    assert.equal(store.load().providers.find((p) => p.id === "prov_e").accountAlias, "oauth5");
+    assert.equal(store.load().providerAliasCounters.xai, 5);
   });
 
   it("keeps stored account short-id routes resolvable", () => {
@@ -221,7 +233,7 @@ describe("same-provider OAuth account fallback", () => {
             headers: { "Content-Type": "application/json" },
           });
         }
-        return successResponse("gateway fallback worked");
+        return responsesSuccessResponse("gateway fallback worked");
       },
     });
 
@@ -442,10 +454,12 @@ describe("same-provider OAuth account fallback", () => {
     const store = createStore(tmpConfig());
     store.seed({ providers: [chatgptAccount("prov_a", "token-a", 100)] });
     const logger = captureLogger();
+    const usageRows = [];
     const encoder = new TextEncoder();
     const router = createRouter({
       store,
       logger,
+      usage: { record: (entry) => usageRows.push(entry) },
       fetchImpl: async () =>
         new Response(
           new ReadableStream({
@@ -484,6 +498,9 @@ describe("same-provider OAuth account fallback", () => {
     assert.ok(
       logger.entries.some((entry) => entry.meta?.event === "stream_failure_no_fallback")
     );
+    assert.equal(usageRows.length, 1);
+    assert.equal(usageRows[0].status, 502);
+    assert.match(usageRows[0].error, /late quota failure/);
   });
 
   it("logs late OpenAI-compatible SSE errors after output has started", async () => {
@@ -596,7 +613,7 @@ describe("same-provider OAuth account fallback", () => {
             start(controller) {
               controller.enqueue(
                 encoder.encode(
-                  `data: ${JSON.stringify({ choices: [{ delta: { content: "first" } }] })}\n\n`
+                  `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "first" })}\n\n`
                 )
               );
               options.signal.addEventListener(
@@ -610,7 +627,12 @@ describe("same-provider OAuth account fallback", () => {
               setTimeout(() => {
                 controller.enqueue(
                   encoder.encode(
-                    `data: ${JSON.stringify({ choices: [{ delta: { content: "second" } }] })}\n\n`
+                    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "second" })}\n\n`
+                  )
+                );
+                controller.enqueue(
+                  encoder.encode(
+                    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed" })}\n\n`
                   )
                 );
                 controller.close();
@@ -850,8 +872,9 @@ describe("same-provider OAuth account fallback", () => {
       result.error.error.details.map((attempt) => attempt.accountAlias),
       ["oauth1", "oauth2"]
     );
-    assert.match(result.error.error.message, /oauth1 \[429\]: rate limited A/);
-    assert.match(result.error.error.message, /oauth2 \[503\]: upstream unavailable B/);
+    assert.match(result.error.error.message, /xAI \(Grok\) \(oauth1\) \[429\]: rate limited A/);
+    assert.match(result.error.error.message, /xAI \(Grok\) \(oauth2\) \[503\]: upstream unavailable B/);
+    assert.doesNotMatch(result.error.error.message, /prov_/);
     const terminal = logger.entries.find((entry) => entry.meta?.event === "accounts_exhausted");
     assert.ok(terminal);
     assert.equal(terminal.meta.attempts.length, 2);
@@ -907,5 +930,158 @@ describe("same-provider OAuth account fallback", () => {
     assert.deepEqual(calls, ["token-b"]);
     assert.ok(logger.entries.some((entry) => entry.meta?.event === "account_locked_skip"));
     assert.ok(logger.entries.some((entry) => entry.meta?.event === "account_fallback"));
+  });
+
+  it("stops an explicit route on a non-retryable failure before later locks can replace it", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({
+      providers: [
+        oauthAccount("prov_a", "token-a", 100),
+        oauthAccount("prov_b", "token-b", 200, {
+          modelLocks: {
+            "*": {
+              until: Date.now() + 5 * 60_000,
+              status: 429,
+              kind: "quota",
+              reason: "stale transport lock",
+            },
+          },
+        }),
+      ],
+      combos: [
+        {
+          id: "combo_general",
+          name: "general",
+          strategy: "fallback",
+          members: [
+            { providerId: "prov_a", model: "grok-4.5" },
+            { providerId: "prov_b", model: "grok-4.5" },
+          ],
+        },
+      ],
+    });
+    const calls = [];
+    const usageRows = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      usage: { record: (entry) => usageRows.push(entry) },
+      fetchImpl: async (_url, options) => {
+        calls.push(authToken(options));
+        return new Response(JSON.stringify({ error: { message: "not-found" } }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "general",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 404);
+    assert.deepEqual(calls, ["token-a"]);
+    assert.equal(result.error.error.details.length, 1);
+    assert.match(result.error.error.message, /xAI \(Grok\) \(oauth1\) \[404\]: not-found/);
+    assert.doesNotMatch(result.error.error.message, /locked|prov_/i);
+    assert.deepEqual(
+      usageRows.map((row) => [row.providerType, row.providerName, row.accountAlias]),
+      [["xai", "xAI (Grok)", "oauth1"]]
+    );
+  });
+
+  it("records streaming usage after the final SSE event instead of an early zero-token success", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({ providers: [oauthAccount("prov_a", "token-a", 100)] });
+    const usageRows = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      usage: { record: (entry) => usageRows.push(entry) },
+      fetchImpl: async () =>
+        new Response(
+          [
+            'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Hello"}',
+            'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        ),
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "xai/grok-4.5",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(usageRows.length, 0);
+    await result.streamPipe({ write() {} });
+    assert.equal(usageRows.length, 1);
+    assert.deepEqual(
+      {
+        prompt_tokens: usageRows[0].prompt_tokens,
+        completion_tokens: usageRows[0].completion_tokens,
+        total_tokens: usageRows[0].total_tokens,
+      },
+      { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 }
+    );
+  });
+
+  it("captures final usage from OpenAI-compatible streams", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({
+      providers: [
+        {
+          id: "prov_glm",
+          type: "glm",
+          name: "GLM Coding",
+          baseUrl: "https://api.z.ai/api/coding/paas/v4",
+          apiKey: "glm-key",
+          models: [{ id: "glm-5.2", name: "GLM 5.2", enabled: true }],
+          enabled: true,
+          createdAt: 100,
+        },
+      ],
+    });
+    const usageRows = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      usage: { record: (entry) => usageRows.push(entry) },
+      fetchImpl: async () =>
+        new Response(
+          [
+            'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        ),
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "glm/glm-5.2",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      },
+    });
+    assert.equal(usageRows.length, 0);
+    await result.streamPipe({ write() {} });
+    assert.deepEqual(
+      usageRows.map((row) => [row.prompt_tokens, row.completion_tokens, row.total_tokens]),
+      [[12, 5, 17]]
+    );
   });
 });

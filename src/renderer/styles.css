@@ -57,7 +57,8 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-summary:focus-visible {
+summary:focus-visible,
+.action-panel-title:focus-visible {
   outline: 2px solid var(--route);
   outline-offset: 2px;
 }
@@ -555,7 +556,15 @@ summary:focus-visible {
   flex: 1;
   background: var(--route);
   transform-origin: left;
-  animation: draw-route 360ms ease-out both;
+  transform: scaleX(1);
+}
+
+.route-map.is-animating .route-track {
+  animation: draw-route 680ms cubic-bezier(0.22, 0.78, 0.28, 1) both;
+}
+
+.route-map.is-animating .route-track:nth-of-type(4) {
+  animation-delay: 430ms;
 }
 
 .route-track::before,
@@ -812,6 +821,10 @@ summary:focus-visible {
   font-weight: 700;
 }
 
+.action-panel-title:focus {
+  border-radius: 3px;
+}
+
 .action-panel-sub {
   margin-top: 3px;
   color: var(--muted);
@@ -821,6 +834,11 @@ summary:focus-visible {
 
 .action-panel .gateway-state {
   color: var(--muted);
+}
+
+.panel-cancel {
+  width: 100%;
+  margin-top: 7px;
 }
 
 .provider-grid {
@@ -1602,8 +1620,8 @@ summary:focus-visible {
 }
 
 @keyframes draw-route {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
+  from { opacity: 0.25; transform: scaleX(0); }
+  to { opacity: 1; transform: scaleX(1); }
 }
 
 @media (prefers-reduced-motion: reduce) {

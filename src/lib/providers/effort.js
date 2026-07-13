@@ -102,6 +102,20 @@ function applyOpenAIEffort(target, source, { omit = false } = {}) {
   return target;
 }
 
+function applyGlmEffort(target, source) {
+  const nativeThinking =
+    source.thinking && typeof source.thinking === "object" ? { ...source.thinking } : null;
+  const intent = extractEffort(source);
+  clearForeignEffortFields(target);
+  delete target.reasoning_effort;
+  if (nativeThinking) {
+    target.thinking = nativeThinking;
+  } else if (intent) {
+    target.thinking = { type: intent.level === "none" ? "disabled" : "enabled" };
+  }
+  return target;
+}
+
 function claudeAdaptiveEffort(level) {
   if (level === "minimal") return "low";
   if (level === "xhigh") return "high";
@@ -159,6 +173,7 @@ module.exports = {
   extractEffort,
   applyResponsesEffort,
   applyOpenAIEffort,
+  applyGlmEffort,
   applyClaudeEffort,
   applyGeminiEffort,
 };

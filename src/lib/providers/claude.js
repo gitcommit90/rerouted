@@ -515,6 +515,26 @@ async function pipeAnthropicSseToOpenAi(upstreamBody, res, model) {
   /** @type {Map<number, { index: number, id: string, name: string }>} */
   const toolByBlockIndex = new Map();
   let nextToolIndex = 0;
+  let streamUsage = null;
+
+  function captureUsage(usage) {
+    if (!usage || typeof usage !== "object") return;
+    const current = streamUsage || {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_tokens: 0,
+      total_tokens: 0,
+    };
+    if (usage.input_tokens != null) current.prompt_tokens = Number(usage.input_tokens) || 0;
+    if (usage.output_tokens != null) {
+      current.completion_tokens = Number(usage.output_tokens) || 0;
+    }
+    if (usage.cache_read_input_tokens != null) {
+      current.cached_tokens = Number(usage.cache_read_input_tokens) || 0;
+    }
+    current.total_tokens = current.prompt_tokens + current.completion_tokens;
+    streamUsage = current;
+  }
 
   async function handleEvents(events) {
     for (const ev of events) {
@@ -530,6 +550,7 @@ async function pipeAnthropicSseToOpenAi(upstreamBody, res, model) {
           upstream.message || upstream.code || upstream.type || "Claude stream failed"
         );
       }
+      captureUsage(data.message?.usage || data.usage);
       if (data.type === "message_start" && !roleSent) {
         res.write(formatSseData(openaiChunk({ id, model, role: "assistant" })));
         roleSent = true;
@@ -621,6 +642,7 @@ async function pipeAnthropicSseToOpenAi(upstreamBody, res, model) {
     }
   }
   res.write(SSE_DONE);
+  return streamUsage;
 }
 async function refreshToken(provider, { fetchImpl = fetch } = {}) {
   if (!provider.refreshToken) throw new Error("No Claude refresh token");

@@ -185,7 +185,7 @@ Questions and bug reports are welcome in [GitHub Issues](https://github.com/gitc
 
 ## Current release
 
-ReRouted `0.3.1` ships for Apple Silicon macOS with a Developer ID signature, stapled Apple notarization tickets, and in-app updates backed by stable GitHub Releases. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
+ReRouted `0.4.0` ships for Apple Silicon macOS with a Developer ID signature, stapled Apple notarization tickets, and in-app updates backed by stable GitHub Releases. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
 
 ReRouted is released by [Public Bytes](https://publicbytes.org), a nonprofit building practical technology for public good.
 

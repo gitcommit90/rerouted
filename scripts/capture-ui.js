@@ -26,9 +26,10 @@ fs.mkdirSync(outDir, { recursive: true });
 fs.mkdirSync(userData, { recursive: true });
 
 const store = createStore(path.join(userData, "config.json"));
+const demoStartedAt = Date.now();
 
 function demoStats() {
-  const now = Date.now();
+  const now = demoStartedAt;
   return {
     totalRequests: 1284,
     sessionRequests: 12,
@@ -111,6 +112,9 @@ let demoLogEntries = [
   { at: Date.now() - 47 * 60_000, level: "info", msg: "Local gateway listening", meta: { host: "127.0.0.1", port: DEFAULT_PORT } },
 ];
 let keyedProviderAdds = [];
+let oauthCancels = [];
+let oauthStartsInFlight = 0;
+let oauthCancelRaces = 0;
 let updateState = {
   status: "current",
   currentVersion: packageInfo.version,
@@ -248,7 +252,17 @@ function registerIpc() {
     ],
   }));
   ipcMain.handle("app:import-detected", async () => ({ ok: true }));
-  ipcMain.handle("app:oauth-start", async () => ({ ok: true, authUrl: "https://example.com" }));
+  ipcMain.handle("app:oauth-start", async () => {
+    oauthStartsInFlight += 1;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    oauthStartsInFlight -= 1;
+    return { ok: true, authUrl: "https://example.com" };
+  });
+  ipcMain.handle("app:oauth-cancel", async (_event, type) => {
+    if (oauthStartsInFlight) oauthCancelRaces += 1;
+    oauthCancels.push(type);
+    return { ok: true };
+  });
   ipcMain.handle("app:oauth-status", async () => ({ active: false }));
   ipcMain.handle("app:oauth-complete", async () => ({
     ok: true,
@@ -259,6 +273,8 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle("harness:keyed-provider-adds", async () => keyedProviderAdds);
+  ipcMain.handle("harness:oauth-cancels", async () => oauthCancels);
+  ipcMain.handle("harness:oauth-cancel-races", async () => oauthCancelRaces);
   ipcMain.handle("app:test-keyed-provider", async () => ({
     ok: true,
     models: [{ id: "test-model", name: "Test" }],
@@ -504,6 +520,50 @@ app.whenReady().then(async () => {
 
   await win.webContents.executeJavaScript(`
     (() => {
+      window.__rr_goto_page("home");
+      return true;
+    })()
+  `);
+  await sleep(1300);
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const details = document.querySelector("[data-home-credentials]");
+      const routeMap = document.querySelector("[data-home-route-map]");
+      const track = routeMap?.querySelector(".route-track");
+      const copyButton = document.getElementById("copy-url");
+      if (!details || !routeMap || !track || !copyButton) {
+        throw new Error("Status persistence controls did not render");
+      }
+      details.open = true;
+      copyButton.focus();
+      window.__rr_home_poll_test = { routeMap, track, copyButton, animationStarts: 0 };
+      routeMap.addEventListener("animationstart", () => {
+        window.__rr_home_poll_test.animationStarts += 1;
+      });
+      return true;
+    })()
+  `);
+  await sleep(2300);
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const test = window.__rr_home_poll_test;
+      const details = document.querySelector("[data-home-credentials]");
+      if (document.querySelector("[data-home-route-map] .route-track") !== test.track) {
+        throw new Error("Status polling replaced the route animation DOM");
+      }
+      if (!details?.open) throw new Error("Status polling collapsed Credentials and network");
+      if (document.activeElement !== test.copyButton) {
+        throw new Error("Status polling moved focus away from the endpoint controls");
+      }
+      if (test.animationStarts !== 0) {
+        throw new Error("Status polling restarted the route animation without new traffic");
+      }
+      return true;
+    })()
+  `);
+
+  await win.webContents.executeJavaScript(`
+    (() => {
       window.__rr_goto_page("providers");
       document.querySelector("[data-expand]")?.click();
       return true;
@@ -512,26 +572,118 @@ app.whenReady().then(async () => {
   await capture("app-providers-expanded.png", ".provider-detail");
 
   await win.webContents.executeJavaScript(`
-    (() => {
+    (async () => {
+      const reconnect = document.querySelector("[data-reauth]");
+      reconnect?.click();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const panel = document.querySelector("#add-panel .action-panel");
+      const viewport = document.getElementById("view").getBoundingClientRect();
+      const rect = panel?.getBoundingClientRect();
+      if (!panel || !rect || rect.top < viewport.top || rect.top >= viewport.bottom) {
+        throw new Error("Reconnect panel was not brought into view");
+      }
+      if (document.activeElement !== panel.querySelector("[data-panel-heading]")) {
+        throw new Error("Reconnect panel did not receive accessible focus");
+      }
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.querySelector("#add-panel .action-panel")) {
+        throw new Error("Escape did not dismiss reconnect panel");
+      }
+      if (document.activeElement !== reconnect) {
+        throw new Error("Reconnect dismissal did not restore focus");
+      }
+      const cancels = await window.rerouted.invoke("harness:oauth-cancels");
+      if (cancels.length !== 1 || cancels[0] !== "chatgpt") {
+        throw new Error("Reconnect dismissal did not cancel the pending OAuth flow");
+      }
+      return true;
+    })()
+  `);
+
+  await win.webContents.executeJavaScript(`
+    (async () => {
       window.__rr_goto_page("providers");
       if (document.querySelector(".provider-detail")) {
         document.querySelector("[data-expand]")?.click();
       }
       document.getElementById("btn-connect")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const panel = document.querySelector("#add-panel .action-panel");
+      const viewport = document.getElementById("view").getBoundingClientRect();
+      const rect = panel?.getBoundingClientRect();
+      if (!panel || !rect || rect.top < viewport.top || rect.bottom > viewport.bottom + 1) {
+        throw new Error("Connect options were not brought into view");
+      }
+      if (document.activeElement !== panel.querySelector("[data-panel-heading]")) {
+        throw new Error("Connect panel did not receive accessible focus");
+      }
       return true;
     })()
   `);
   await capture("app-providers-connect.png", "#add-panel .action-panel", "#add-panel .action-panel");
 
   await win.webContents.executeJavaScript(`
-    (() => {
+    (async () => {
+      const opener = document.getElementById("btn-connect");
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.querySelector("#add-panel .action-panel")) {
+        throw new Error("Escape did not dismiss Connect panel");
+      }
+      if (document.activeElement !== opener) {
+        throw new Error("Connect dismissal did not restore focus");
+      }
+      opener.click();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      document.querySelector("#add-panel .tile")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const oauth = document.querySelector("#add-panel .action-panel");
+      const cancel = oauth?.querySelector("[data-panel-cancel]");
+      if (!oauth || !cancel) {
+        throw new Error("OAuth panel was not dismissible while connection startup was pending");
+      }
+      cancel.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.querySelector("#add-panel .action-panel") || document.activeElement !== opener) {
+        throw new Error("OAuth Cancel did not dismiss and restore focus");
+      }
+      const deadline = Date.now() + 1000;
+      let cancels = await window.rerouted.invoke("harness:oauth-cancels");
+      while (cancels.length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        cancels = await window.rerouted.invoke("harness:oauth-cancels");
+      }
+      if (cancels.length !== 2 || cancels[1] !== "chatgpt") {
+        throw new Error("OAuth dismissal did not cancel the pending flow");
+      }
+      const cancelRaces = await window.rerouted.invoke("harness:oauth-cancel-races");
+      if (cancelRaces !== 0) {
+        throw new Error("OAuth dismissal raced callback-session creation");
+      }
+      opener.click();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return true;
+    })()
+  `);
+
+  await win.webContents.executeJavaScript(`
+    (async () => {
       document.getElementById("btn-key")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 500));
       const labels = [...document.querySelectorAll("[data-keyed-preset]")].map((button) =>
         (button.textContent || "").trim()
       );
       const expected = ["OpenRouter", "NVIDIA NIM", "Cloudflare", "GLM Coding", "Custom"];
       if (JSON.stringify(labels) !== JSON.stringify(expected)) {
         throw new Error("Post-onboarding keyed presets did not render: " + labels.join(", "));
+      }
+      const panel = document.querySelector("#add-panel .action-panel");
+      if (!panel?.querySelector("[data-panel-cancel]")) {
+        throw new Error("API key panel did not render a Cancel action");
+      }
+      if (document.activeElement !== panel.querySelector("[data-panel-heading]")) {
+        throw new Error("API key panel did not receive accessible focus");
       }
       return labels;
     })()
