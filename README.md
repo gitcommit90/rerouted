@@ -22,8 +22,7 @@
 </div>
 
 <p align="center">
-  <img src="./docs/images/status.png" width="400" alt="ReRouted status panel" />
-  <img src="./docs/images/route-editor.png" width="400" alt="ReRouted route editor" />
+  <img src="./docs/images/product-tour.webp" width="900" alt="Animated product tour of ReRouted accounts, routes, activity, and status" />
 </p>
 
 ## One URL. The routing decision lives somewhere sane.
@@ -143,6 +142,11 @@ Then enter the same base URL, gateway key, and route name in a configurable clie
 - **Activity:** requests, failures, token counts, route choices, and account usage.
 - **Quota:** provider-specific subscription windows where supported.
 - **Settings:** gateway keys, localhost or network binding, login launch, security controls, and signed software updates.
+
+<p align="center">
+  <img src="./docs/images/status.png" width="400" alt="ReRouted status panel" />
+  <img src="./docs/images/route-editor.png" width="400" alt="ReRouted route editor" />
+</p>
 
 The gateway continues running when the panel is hidden. Quitting ReRouted stops both.
 
