@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ReRouted social card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; margin: 0; overflow: hidden; }
+  body {
+    color: #1b1d18;
+    background:
+      linear-gradient(90deg, transparent 0 74px, rgba(239, 91, 42, 0.18) 74px 76px, transparent 76px),
+      repeating-linear-gradient(0deg, transparent 0 71px, rgba(57, 55, 48, 0.035) 71px 72px),
+      #ede8dc;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+  }
+  .frame {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    padding: 54px 66px 48px 100px;
+  }
+  .top, .bottom { display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 14px; font-family: "Fraunces", Georgia, serif; font-size: 32px; font-weight: 700; }
+  .brand b { color: #d8461c; }
+  .mark { width: 36px; height: 36px; fill: none; stroke: #ef5b2a; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+  .domain { color: #777a70; font-size: 15px; }
+  .main { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 58px; align-items: center; height: 430px; }
+  .eyebrow { color: #c93f16; font-size: 14px; font-weight: 600; letter-spacing: 0.14em; }
+  h1 { margin: 20px 0 22px; font-family: "Fraunces", Georgia, serif; font-size: 67px; line-height: 0.98; letter-spacing: -0.04em; font-weight: 600; }
+  h1 em { color: #d8461c; font-weight: 500; }
+  .lead { width: 520px; color: #52564d; font-family: "Fraunces", Georgia, serif; font-size: 25px; line-height: 1.35; }
+  .router {
+    position: relative;
+    min-height: 330px;
+    padding: 28px;
+    color: #f5f0e6;
+    border: 1px solid #3e4138;
+    border-radius: 28px;
+    background: #1b1f1a;
+    box-shadow: 0 30px 70px rgba(36, 34, 27, 0.25);
+    overflow: hidden;
+  }
+  .router::after {
+    content: "";
+    position: absolute;
+    right: -100px;
+    top: -100px;
+    width: 260px;
+    height: 260px;
+    border: 2px solid rgba(239, 91, 42, 0.34);
+    border-radius: 50%;
+    box-shadow: 0 0 0 34px rgba(239, 91, 42, 0.05), 0 0 0 72px rgba(239, 91, 42, 0.03);
+  }
+  .router-head { display: flex; justify-content: space-between; color: #9da198; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .live { color: #85d7b0; }
+  .request { margin: 22px 0 18px; padding: 16px; border: 1px solid #44483f; border-radius: 15px; background: #272b25; color: #c9cbc5; font-size: 13px; }
+  .request b { color: #ff9a72; font-weight: 500; }
+  .route-label { margin-bottom: 10px; color: #858981; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .member { position: relative; z-index: 1; display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 11px; margin-top: 10px; padding: 12px 14px; border: 1px solid #3d4239; border-radius: 13px; background: rgba(39, 43, 37, 0.92); }
+  .member:first-of-type { border-color: #a84120; box-shadow: inset 3px 0 #ef5b2a; }
+  .num { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: #33382f; color: #f3efe5; font-weight: 600; }
+  .name { font-family: "Fraunces", Georgia, serif; font-size: 17px; font-weight: 600; }
+  .sub { margin-top: 2px; color: #8e928a; font-size: 10px; }
+  .status { color: #b9bcb5; font-size: 10px; }
+  .status.try { color: #ff9a72; }
+  .bottom { color: #777a70; font-size: 12px; }
+  .bottom strong { color: #343830; font-weight: 600; }
+</style>
+</head>
+<body>
+  <main class="frame">
+    <header class="top">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 28 28" aria-hidden="true">
+          <path d="M5 5v6c0 2.2 1.8 4 4 4h10" />
+          <path d="m16 11 4 4-4 4" />
+          <circle cx="5" cy="5" r="2" />
+          <circle cx="5" cy="23" r="2" />
+          <path d="M5 21v-2c0-2.2 1.8-4 4-4" />
+        </svg>
+        <span>Re<b>Routed</b></span>
+      </div>
+      <div class="domain">rerouted.dev</div>
+    </header>
+
+    <section class="main">
+      <div>
+        <div class="eyebrow">LOCAL GATEWAY / macOS MENU BAR</div>
+        <h1>One endpoint.<br />Your run <em>keeps going.</em></h1>
+        <div class="lead">Put every connected account, model, and fallback route behind one local URL.</div>
+      </div>
+
+      <div class="router">
+        <div class="router-head"><span>route: coding / fallback</span><span class="live">local 4949</span></div>
+        <div class="request">POST /v1/chat/completions &nbsp; <b>model: coding</b></div>
+        <div class="route-label">try in order</div>
+        <div class="member">
+          <div class="num">1</div>
+          <div><div class="name">Primary model</div><div class="sub">account 1 / preferred</div></div>
+          <div class="status try">trying</div>
+        </div>
+        <div class="member">
+          <div class="num">2</div>
+          <div><div class="name">Second account</div><div class="sub">same route / next quota</div></div>
+          <div class="status">ready</div>
+        </div>
+        <div class="member">
+          <div class="num">3</div>
+          <div><div class="name">Backup provider</div><div class="sub">same client model name</div></div>
+          <div class="status">ready</div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="bottom">
+      <span><strong>Local routing for AI tools.</strong> No cloud control plane. No Dock icon.</span>
+      <span>0.3.1 / Apple Silicon / local-first</span>
+    </footer>
+  </main>
+</body>
+</html>

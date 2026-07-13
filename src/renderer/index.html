@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ReRouted</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="shell" class="shell">
+      <header class="titlebar">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 28 28" aria-hidden="true">
+            <path d="M5 5v6c0 2.2 1.8 4 4 4h10" />
+            <path d="m16 11 4 4-4 4" />
+            <circle cx="5" cy="5" r="2" />
+            <circle cx="5" cy="23" r="2" />
+            <path d="M5 21v-2c0-2.2 1.8-4 4-4" />
+          </svg>
+          <span class="brand-name">ReRouted</span>
+        </div>
+        <div class="titlebar-actions">
+          <div class="chrome-status" id="chrome-status">
+            <i id="chrome-status-dot"></i>
+            <span id="chrome-status-text">Local</span>
+          </div>
+          <button type="button" class="icon-btn" id="btn-close" title="Close" aria-label="Close">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg>
+          </button>
+        </div>
+      </header>
+      <div id="toast" class="toast" hidden></div>
+      <main id="view" class="view"></main>
+      <nav id="nav" class="nav" hidden>
+        <button type="button" data-page="home" class="nav-btn active">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h4l2-5 3 10 2-5h3" /></svg>
+          <span>Status</span>
+        </button>
+        <button type="button" data-page="providers" class="nav-btn">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="7" r="2.5" /><circle cx="14" cy="7" r="2.5" /><path d="M2.5 16c.4-3 1.8-4.5 3.5-4.5S9.1 13 9.5 16M10.5 16c.4-3 1.8-4.5 3.5-4.5s3.1 1.5 3.5 4.5" /></svg>
+          <span>Accounts</span>
+        </button>
+        <button type="button" data-page="combos" class="nav-btn">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4v4c0 1.7 1.3 3 3 3h8M10 7l4 4-4 4" /><circle cx="3" cy="4" r="1.5" /><circle cx="3" cy="16" r="1.5" /><path d="M3 14c0-1.7 1.3-3 3-3" /></svg>
+          <span>Routes</span>
+        </button>
+        <button type="button" data-page="stats" class="nav-btn">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16V9m5 7V4m5 12v-6m5 6V7" /></svg>
+          <span>Activity</span>
+        </button>
+        <button type="button" data-page="settings" class="nav-btn">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12M4 10h12M4 15h12" /><circle cx="8" cy="5" r="2" /><circle cx="13" cy="10" r="2" /><circle cx="7" cy="15" r="2" /></svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

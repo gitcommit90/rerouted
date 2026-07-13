@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ReRouted — one local endpoint. no dead ends.</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+<link rel="alternate icon" href="favicon.ico" />
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
+<link rel="canonical" href="https://rerouted.dev/" />
+<meta name="theme-color" content="#ede8dc" />
+<meta name="description" content="A macOS menu-bar router for AI tools. Keep one local endpoint while ReRouted handles accounts, routes, quota limits, timeouts, and retryable provider failures." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="ReRouted" />
+<meta property="og:title" content="ReRouted - one local endpoint for your AI tools" />
+<meta property="og:description" content="One local endpoint for every connected account, model, and fallback route." />
+<meta property="og:url" content="https://rerouted.dev/" />
+<meta property="og:image" content="https://rerouted.dev/social-card.png" />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="ReRouted routing a local chat-completions request through a named fallback route." />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="ReRouted - one local endpoint for your AI tools" />
+<meta name="twitter:description" content="One local endpoint for every connected account, model, and fallback route." />
+<meta name="twitter:image" content="https://rerouted.dev/social-card.png" />
+<meta name="twitter:image:alt" content="ReRouted routing a local chat-completions request through a named fallback route." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --canvas: #ede8dc;
+    --paper: #faf8f2;
+    --paper-strong: #fffdf8;
+    --ink: #1b1d18;
+    --ink-soft: #44483f;
+    --muted: #777a70;
+    --faint: #a5a397;
+    --line: #d8d2c5;
+    --line-strong: #c5bdad;
+    --route: #ef5b2a;
+    --route-dark: #c93f16;
+    --route-soft: #fde7dc;
+    --pine: #247454;
+    --pine-soft: #ddf1e6;
+    --ochre: #a76b14;
+    --ochre-soft: #f7ecd4;
+    --danger: #b83a31;
+    --danger-soft: #f8e0dd;
+    --night: #20231d;
+    --night-soft: #2b2f27;
+    --mono-bg: #eeeadf;
+    --shadow-sm: 0 2px 8px rgba(35, 31, 23, 0.06), 0 8px 24px rgba(35, 31, 23, 0.06);
+    --shadow: 0 18px 54px rgba(35, 31, 23, 0.16);
+    --shadow-lg: 0 34px 90px rgba(35, 31, 23, 0.26);
+    --display: "Fraunces", "Avenir Next", Georgia, serif;
+    --ui: "Inter", "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+
+  body {
+    font-family: var(--ui);
+    color: var(--ink);
+    background: var(--canvas);
+    font-size: 17px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  /* paper grain + warm vignette on the whole canvas */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(120% 80% at 50% -10%, rgba(255, 253, 248, 0.9), transparent 60%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  }
+
+  ::selection { background: var(--route-soft); color: var(--route-dark); }
+
+  a { color: inherit; text-decoration: none; }
+
+  .wrap { width: 100%; max-width: 1120px; margin: 0 auto; padding: 0 28px; position: relative; z-index: 1; }
+
+  /* ---- notebook margin rule, echoes the app's view gutter ---- */
+  .ruled { position: relative; }
+  .ruled::before {
+    content: "";
+    position: absolute;
+    left: 46px; top: 0; bottom: 0;
+    width: 2px;
+    background: rgba(239, 91, 42, 0.16);
+  }
+  @media (max-width: 720px) { .ruled::before { display: none; } }
+
+  .eyebrow {
+    font-family: var(--display);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--route-dark);
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 22px; height: 2px;
+    background: var(--route);
+    border-radius: 2px;
+  }
+
+  /* =========================================================
+     NAV
+  ========================================================= */
+  header.nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: saturate(140%) blur(14px);
+    -webkit-backdrop-filter: saturate(140%) blur(14px);
+    background: rgba(237, 232, 220, 0.72);
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.3s ease, background 0.3s ease;
+  }
+  header.nav.scrolled {
+    border-bottom-color: var(--line);
+    background: rgba(237, 232, 220, 0.88);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 66px;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand-mark { width: 30px; height: 30px; display: block; }
+  .brand-mark path { fill: none; stroke: var(--route); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .brand-mark circle { fill: var(--route); }
+  .brand-mark .dim { fill: var(--line-strong); }
+  .brand-name {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 20px;
+    letter-spacing: -0.02em;
+  }
+  .brand-name b { color: var(--route-dark); font-weight: 600; }
+  .nav-links { display: flex; align-items: center; gap: 30px; }
+  .nav-links a {
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    transition: color 0.15s ease;
+  }
+  .nav-links a:hover { color: var(--route-dark); }
+  .nav-links .ghost { color: var(--muted); }
+  @media (max-width: 720px) { .nav-links a:not(.btn) { display: none; } }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--ui);
+    font-weight: 600;
+    font-size: 15px;
+    padding: 11px 20px;
+    border-radius: 11px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--route);
+    color: #fff;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.25) inset, 0 8px 22px rgba(239, 91, 42, 0.28);
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 1px 0 rgba(255,255,255,0.25) inset, 0 12px 30px rgba(239, 91, 42, 0.36); background: var(--route-dark); }
+  .btn-ghost {
+    background: var(--paper-strong);
+    color: var(--ink);
+    border-color: var(--line-strong);
+  }
+  .btn-ghost:hover { transform: translateY(-1px); border-color: var(--ink-soft); }
+  .btn svg { width: 16px; height: 16px; }
+
+  /* =========================================================
+     HERO
+  ========================================================= */
+  .hero { padding: 74px 0 40px; }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.02fr 0.98fr;
+    gap: 56px;
+    align-items: center;
+  }
+  @media (max-width: 940px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 40px; }
+    .hero { padding: 48px 0 20px; }
+  }
+
+  .hero-copy { padding-left: 34px; }
+  @media (max-width: 720px) { .hero-copy { padding-left: 0; } }
+
+  h1.headline {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(42px, 6.2vw, 68px);
+    line-height: 0.98;
+    letter-spacing: -0.035em;
+    margin: 22px 0 0;
+    color: var(--ink);
+  }
+  h1.headline .em {
+    font-style: italic;
+    color: var(--route-dark);
+    position: relative;
+  }
+  /* the hand-drawn reroute underline under "keeps going" */
+  h1.headline .em::after {
+    content: "";
+    position: absolute;
+    left: -2px; right: -2px; bottom: -6px;
+    height: 10px;
+    background: no-repeat center/100% 100% url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 12'%3E%3Cpath d='M2 8 C 40 3, 70 3, 100 7 S 170 11, 198 4' fill='none' stroke='%23ef5b2a' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E");
+    opacity: 0.55;
+  }
+
+  .subhead {
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    margin: 26px 0 0;
+    max-width: 470px;
+  }
+  .subhead b { color: var(--ink); font-weight: 600; }
+
+  .hero-cta { display: flex; align-items: center; gap: 14px; margin-top: 32px; flex-wrap: wrap; }
+  .hero-note {
+    margin-top: 18px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--muted);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    max-width: 480px;
+  }
+  .hero-note .dot { flex: 0 0 7px; width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--pine); box-shadow: 0 0 0 3px rgba(36,116,84,0.16); }
+  .hero-note code { font-family: var(--mono); color: var(--ink-soft); white-space: nowrap; }
+
+  /* =========================================================
+     THE LIVE DEMO — the "ohhhh" machine
+  ========================================================= */
+  .demo {
+    position: relative;
+    border-radius: 20px;
+    background: var(--night);
+    box-shadow: var(--shadow-lg);
+    padding: 20px 20px 22px;
+    color: #ece8dd;
+    overflow: hidden;
+  }
+  .demo::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(120% 90% at 80% 0%, rgba(239,91,42,0.12), transparent 55%);
+    pointer-events: none;
+  }
+  .demo-chrome {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 16px;
+  }
+  .demo-dots { display: flex; gap: 6px; }
+  .demo-dots i { width: 11px; height: 11px; border-radius: 50%; background: #3a3e35; }
+  .demo-title {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: rgba(236,232,221,0.5);
+    margin-left: 4px;
+    letter-spacing: 0.01em;
+  }
+  .demo-live {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--pine-soft);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .demo-live i { width: 6px; height: 6px; border-radius: 50%; background: #4fd39a; animation: blink 1.4s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+  /* the client request line */
+  .demo-client {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 11px;
+    padding: 12px 14px;
+    position: relative;
+    z-index: 1;
+  }
+  .demo-client .k { color: #e2a06a; }
+  .demo-client .s { color: #8fd3a8; }
+  .demo-client .c { color: rgba(236,232,221,0.4); }
+  .demo-client .model {
+    color: #fff;
+    background: rgba(239,91,42,0.18);
+    border: 1px solid rgba(239,91,42,0.4);
+    border-radius: 5px;
+    padding: 1px 6px;
+  }
+
+  /* route ladder */
+  .ladder {
+    position: relative;
+    z-index: 1;
+    margin: 16px 2px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ladder-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(236,232,221,0.42);
+    margin-bottom: 3px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .rung {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 13px;
+    border-radius: 11px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.025);
+    transition: all 0.35s ease;
+    position: relative;
+  }
+  .rung .idx {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: rgba(236,232,221,0.4);
+    width: 14px;
+    flex: 0 0 14px;
+  }
+  .rung .glyph {
+    width: 26px; height: 26px; flex: 0 0 26px;
+    border-radius: 7px;
+    display: grid; place-items: center;
+    background: rgba(255,255,255,0.06);
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 13px;
+    color: #ece8dd;
+  }
+  .rung .who { flex: 1; min-width: 0; }
+  .rung .who .name { font-weight: 600; font-size: 14px; color: #f3efe5; }
+  .rung .who .sub { font-family: var(--mono); font-size: 10.5px; color: rgba(236,232,221,0.42); margin-top: 1px; }
+  .rung .status {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    background: rgba(255,255,255,0.06);
+    color: rgba(236,232,221,0.5);
+    transition: all 0.3s ease;
+  }
+
+  /* state: currently trying */
+  .rung.trying {
+    border-color: rgba(239,91,42,0.5);
+    background: rgba(239,91,42,0.09);
+    box-shadow: 0 0 0 1px rgba(239,91,42,0.25), 0 10px 30px rgba(239,91,42,0.14);
+  }
+  .rung.trying .status { background: rgba(239,91,42,0.2); color: #ffcaae; }
+  .rung.trying .glyph { background: rgba(239,91,42,0.25); }
+
+  /* state: failed (429 / 5xx) */
+  .rung.failed { border-color: rgba(184,58,49,0.4); background: rgba(184,58,49,0.08); opacity: 0.62; }
+  .rung.failed .status { background: rgba(184,58,49,0.22); color: #f6b3ab; }
+  .rung.failed .who .name { text-decoration: line-through; text-decoration-color: rgba(246,179,171,0.6); }
+
+  /* state: succeeded */
+  .rung.won { border-color: rgba(79,211,154,0.45); background: rgba(36,116,84,0.14); box-shadow: 0 0 0 1px rgba(79,211,154,0.22); }
+  .rung.won .status { background: rgba(79,211,154,0.2); color: #a7ecc8; }
+  .rung.won .glyph { background: rgba(79,211,154,0.22); }
+
+  /* the reroute arrow that slides between rungs */
+  .reroute-mark {
+    position: absolute;
+    left: 20px;
+    width: 18px; height: 18px;
+    opacity: 0;
+    transition: opacity 0.25s ease, top 0.4s cubic-bezier(.5,0,.2,1);
+    pointer-events: none;
+    z-index: 3;
+  }
+  .reroute-mark svg { width: 100%; height: 100%; }
+  .reroute-mark.show { opacity: 1; }
+
+  /* the output stream */
+  .demo-out {
+    position: relative;
+    z-index: 1;
+    margin-top: 16px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: rgba(236,232,221,0.55);
+    border-top: 1px dashed rgba(255,255,255,0.1);
+    padding-top: 13px;
+    min-height: 46px;
+  }
+  .demo-out .lbl { color: rgba(236,232,221,0.38); }
+  .demo-out .txt { color: #f3efe5; }
+  .caret { display: inline-block; width: 8px; height: 15px; background: var(--route); vertical-align: -2px; margin-left: 2px; animation: blink 1s step-end infinite; border-radius: 1px; }
+
+  .demo-foot {
+    position: relative; z-index: 1;
+    margin-top: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--mono); font-size: 11px;
+    color: rgba(236,232,221,0.44);
+  }
+  .demo-foot b { color: #f3efe5; font-weight: 600; }
+  .reroute-count { color: #ffb694; }
+
+  /* =========================================================
+     TRUST STRIP
+  ========================================================= */
+  .strip {
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 26px 0;
+    margin-top: 48px;
+  }
+  .strip-inner { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; justify-content: center; }
+  .strip-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+  .chip {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-soft);
+    padding: 7px 13px;
+    border-radius: 9px;
+    background: var(--paper-strong);
+    border: 1px solid var(--line);
+  }
+  .chip b { color: var(--route-dark); }
+
+  /* =========================================================
+     SECTION SCAFFOLD
+  ========================================================= */
+  section.band { padding: 92px 0; }
+  .sec-head { max-width: 640px; margin-bottom: 52px; }
+  .sec-head.center { margin-left: auto; margin-right: auto; text-align: center; }
+  .sec-head.center .eyebrow { justify-content: center; }
+  h2.sec-title {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(30px, 4vw, 44px);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    margin: 18px 0 0;
+  }
+  h2.sec-title .em { font-style: italic; color: var(--route-dark); }
+  .sec-lead { font-size: 18px; color: var(--muted); margin-top: 18px; line-height: 1.6; }
+
+  /* =========================================================
+     HOW IT WORKS — 3 beats
+  ========================================================= */
+  .beats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  @media (max-width: 860px) { .beats { grid-template-columns: 1fr; } }
+  .beat {
+    background: var(--paper-strong);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 26px 24px 28px;
+    position: relative;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .beat:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+  .beat .num {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--route);
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    background: var(--route-soft);
+    border: 1px solid rgba(239,91,42,0.2);
+    margin-bottom: 18px;
+  }
+  .beat h3 { font-family: var(--display); font-weight: 600; font-size: 22px; letter-spacing: -0.02em; margin-bottom: 9px; }
+  .beat p { font-size: 15.5px; color: var(--muted); line-height: 1.55; }
+  .beat code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--mono-bg);
+    padding: 2px 7px;
+    border-radius: 6px;
+    color: var(--route-dark);
+    border: 1px solid var(--line);
+  }
+
+  /* =========================================================
+     FEATURE GRID
+  ========================================================= */
+  .band-dark {
+    background: var(--night);
+    color: #ece8dd;
+    position: relative;
+    overflow: hidden;
+  }
+  .band-dark::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(80% 60% at 15% 0%, rgba(239,91,42,0.10), transparent 55%);
+    pointer-events: none;
+  }
+  .band-dark .eyebrow { color: #ffb694; }
+  .band-dark .eyebrow::before { background: var(--route); }
+  .band-dark h2.sec-title { color: #fbf8f0; }
+  .band-dark h2.sec-title .em { color: #ffb694; }
+  .band-dark .sec-lead { color: rgba(236,232,221,0.6); }
+
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; overflow: hidden; }
+  @media (max-width: 860px) { .features { grid-template-columns: 1fr; } }
+  .feature {
+    background: var(--night);
+    padding: 30px 26px 32px;
+    transition: background 0.25s ease;
+    position: relative;
+  }
+  .feature:hover { background: #262a22; }
+  .feature .ic { width: 30px; height: 30px; margin-bottom: 18px; }
+  .feature .ic svg { width: 100%; height: 100%; fill: none; stroke: var(--route); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .feature h3 { font-family: var(--display); font-weight: 600; font-size: 20px; letter-spacing: -0.015em; margin-bottom: 9px; color: #fbf8f0; }
+  .feature p { font-size: 14.5px; line-height: 1.55; color: rgba(236,232,221,0.58); }
+  .feature p b { color: #f3efe5; font-weight: 600; }
+
+  /* =========================================================
+     PROVIDERS
+  ========================================================= */
+  .providers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 860px) { .providers { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 480px) { .providers { grid-template-columns: 1fr; } }
+  .provider {
+    background: var(--paper-strong);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px 18px;
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  .provider:hover { transform: translateY(-3px); border-color: var(--line-strong); box-shadow: var(--shadow-sm); }
+  .provider .p-name { font-family: var(--display); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; margin-bottom: 4px; }
+  .provider .p-path { font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+  .provider .p-tag {
+    display: inline-block;
+    margin-top: 12px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--pine);
+    background: var(--pine-soft);
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+  .provider .p-tag.key { color: var(--ochre); background: var(--ochre-soft); }
+
+  /* =========================================================
+     SETUP
+  ========================================================= */
+  .setup-grid { display: grid; grid-template-columns: 0.9fr 1.1fr; gap: 48px; align-items: center; }
+  @media (max-width: 860px) { .setup-grid { grid-template-columns: 1fr; gap: 34px; } }
+  .setup-steps { list-style: none; counter-reset: step; }
+  .setup-steps li {
+    counter-increment: step;
+    display: flex;
+    gap: 16px;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .setup-steps li:last-child { border-bottom: 0; }
+  .setup-steps li::before {
+    content: counter(step);
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--route-dark);
+    flex: 0 0 30px;
+    height: 30px;
+    display: grid; place-items: center;
+    border: 1.5px solid var(--route);
+    border-radius: 50%;
+  }
+  .setup-steps li .st-copy h4 { font-family: var(--display); font-weight: 600; font-size: 18px; margin-bottom: 3px; }
+  .setup-steps li .st-copy p { font-size: 14.5px; color: var(--muted); line-height: 1.5; }
+
+  .codeblock {
+    background: var(--night);
+    border-radius: 16px;
+    padding: 22px 22px;
+    box-shadow: var(--shadow);
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.9;
+    position: relative;
+    overflow-x: auto;
+  }
+  .codeblock .cb-top { display: flex; align-items: center; gap: 7px; margin-bottom: 16px; }
+  .codeblock .cb-top i { width: 10px; height: 10px; border-radius: 50%; background: #3a3e35; }
+  .codeblock .cb-top span { margin-left: auto; font-size: 10px; color: rgba(236,232,221,0.4); letter-spacing: 0.06em; text-transform: uppercase; }
+  .codeblock .cb-line { color: #ece8dd; white-space: pre; }
+  .codeblock .env { color: #e2a06a; }
+  .codeblock .val { color: #8fd3a8; }
+  .codeblock .cmt { color: rgba(236,232,221,0.38); }
+  .copy-btn {
+    position: absolute; top: 18px; right: 18px;
+    font-family: var(--ui); font-size: 12px; font-weight: 600;
+    color: rgba(236,232,221,0.7);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    padding: 6px 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .copy-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+  .copy-btn.done { color: #a7ecc8; border-color: rgba(79,211,154,0.4); }
+
+  /* =========================================================
+     CLOSING CTA
+  ========================================================= */
+  .closer {
+    text-align: center;
+    padding: 104px 0 108px;
+    position: relative;
+  }
+  .closer h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(34px, 5vw, 58px);
+    letter-spacing: -0.035em;
+    line-height: 1.02;
+    max-width: 760px;
+    margin: 22px auto 0;
+  }
+  .closer h2 .em { font-style: italic; color: var(--route-dark); }
+  .closer p { font-size: 18px; color: var(--muted); margin: 22px auto 34px; max-width: 500px; }
+  .closer .hero-cta { justify-content: center; }
+  .closer-mark { width: 56px; height: 56px; margin: 0 auto; display: block; }
+  .closer-mark path { fill: none; stroke: var(--route); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .closer-mark circle { fill: var(--route); }
+  .closer-mark .dim { fill: var(--line-strong); }
+
+  /* =========================================================
+     FOOTER
+  ========================================================= */
+  footer.foot {
+    border-top: 1px solid var(--line);
+    padding: 40px 0 56px;
+  }
+  .foot-inner { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  .foot-copy { font-size: 13.5px; color: var(--muted); }
+  .foot-copy b { color: var(--ink-soft); font-weight: 600; }
+  .foot-links { display: flex; gap: 24px; font-size: 13.5px; color: var(--muted); }
+  .foot-links a:hover { color: var(--route-dark); }
+  .foot-mono { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+  /* =========================================================
+     REVEAL ANIMATION
+  ========================================================= */
+  .reveal { opacity: 0; transform: translateY(22px); transition: opacity 0.7s cubic-bezier(.2,.6,.2,1), transform 0.7s cubic-bezier(.2,.6,.2,1); }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    * { animation: none !important; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== NAV ===================== -->
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="ReRouted home">
+      <svg class="brand-mark" viewBox="0 0 28 28" aria-hidden="true">
+        <path d="M5 5v6c0 2.2 1.8 4 4 4h10" />
+        <path d="m16 11 4 4-4 4" />
+        <circle cx="5" cy="5" r="2" />
+        <circle class="dim" cx="5" cy="23" r="2" />
+        <path d="M5 21v-2c0-2.2 1.8-4 4-4" style="stroke: var(--line-strong)" />
+      </svg>
+      <span class="brand-name">Re<b>Routed</b></span>
+    </a>
+    <nav class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#connect">What connects</a>
+      <a href="#setup">Setup</a>
+      <a class="btn btn-primary" href="https://github.com/gitcommit90/rerouted/releases/latest">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a1 1 0 0 1 1 1v6.09l1.8-1.8a1 1 0 1 1 1.4 1.42l-3.5 3.5a1 1 0 0 1-1.4 0l-3.5-3.5a1 1 0 1 1 1.4-1.42L7 8.59V2.5a1 1 0 0 1 1-1Z"/><path d="M2.5 13a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1Z"/></svg>
+        Download for Mac
+      </a>
+    </nav>
+  </div>
+</header>
+
+<!-- ===================== HERO ===================== -->
+<a id="top"></a>
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <span class="eyebrow">Local gateway · macOS menu bar</span>
+      <h1 class="headline">One endpoint.<br />Your run <span class="em">keeps&nbsp;going</span>.</h1>
+      <p class="subhead">
+        Point any configurable chat-completions client at <b>one local URL</b>.
+        When a provider rate-limits, times out, or fails before output begins, ReRouted moves to the next route member —
+        <b>your endpoint and route stay the same</b>.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/gitcommit90/rerouted/releases/latest">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a1 1 0 0 1 1 1v6.09l1.8-1.8a1 1 0 1 1 1.4 1.42l-3.5 3.5a1 1 0 0 1-1.4 0l-3.5-3.5a1 1 0 1 1 1.4-1.42L7 8.59V2.5a1 1 0 0 1 1-1Z"/><path d="M2.5 13a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1Z"/></svg>
+          Download for Apple Silicon
+        </a>
+        <a class="btn btn-ghost" href="#how">See how it routes</a>
+      </div>
+      <div class="hero-note"><span class="dot"></span><span>Binds to <code>127.0.0.1</code> by default. No hosted control plane. No ReRouted account. No&nbsp;Dock&nbsp;icon.</span></div>
+    </div>
+
+    <!-- THE LIVE DEMO -->
+    <div class="demo reveal" id="demo">
+      <div class="demo-chrome">
+        <div class="demo-dots"><i></i><i></i><i></i></div>
+        <span class="demo-title">your-editor → 127.0.0.1:4949/v1</span>
+        <span class="demo-live"><i></i>live</span>
+      </div>
+
+      <div class="demo-client">
+<span class="c">POST /v1/chat/completions</span>
+<span class="k">"model"</span>: <span class="model" id="req-model">coding</span><span class="c">,</span> <span class="k">"stream"</span>: <span class="s">true</span>
+      </div>
+
+      <div class="ladder" id="ladder">
+        <div class="ladder-label"><span>route “coding” · fallback</span><span id="ladder-strategy">try in order ↓</span></div>
+        <div class="reroute-mark" id="rrmark">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6v5c0 2.2 1.8 4 4 4h9" fill="none" stroke="#ffb694" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="m14 11 4 4-4 4" fill="none" stroke="#ffb694" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+
+        <div class="rung" data-rung="0">
+          <span class="idx">1</span>
+          <span class="glyph">C</span>
+          <span class="who"><div class="name">Claude Sonnet</div><div class="sub">anthropic · oauth1</div></span>
+          <span class="status">idle</span>
+        </div>
+        <div class="rung" data-rung="1">
+          <span class="idx">2</span>
+          <span class="glyph">G</span>
+          <span class="who"><div class="name">GPT Codex</div><div class="sub">chatgpt · oauth2</div></span>
+          <span class="status">idle</span>
+        </div>
+        <div class="rung" data-rung="2">
+          <span class="idx">3</span>
+          <span class="glyph">O</span>
+          <span class="who"><div class="name">OpenRouter backup</div><div class="sub">api-key · fallback</div></span>
+          <span class="status">idle</span>
+        </div>
+      </div>
+
+      <div class="demo-out" id="out">
+        <span class="lbl">← </span><span class="txt" id="out-txt"></span><span class="caret" id="caret"></span>
+      </div>
+
+      <div class="demo-foot">
+        <span>client keeps <b>one</b> endpoint and route</span>
+        <span class="reroute-count" id="rr-count">0 reroutes</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TRUST STRIP ===================== -->
+<div class="strip reveal">
+  <div class="wrap strip-inner">
+    <span class="strip-label">Speaks the API your tools already speak</span>
+    <span class="chip">editors</span>
+    <span class="chip">agents</span>
+    <span class="chip">scripts</span>
+    <span class="chip">terminal tools</span>
+    <span class="chip"><b>chat-completions</b> clients</span>
+  </div>
+</div>
+
+<!-- ===================== HOW IT WORKS ===================== -->
+<section class="band" id="how">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">The idea, in three moves</span>
+      <h2 class="sec-title">You already changed your mind about providers <span class="em">five times this week.</span></h2>
+      <p class="sec-lead">Your editor doesn’t care which account still has quota. So stop making it care. Put the decision in one place — and let it recover on its own.</p>
+    </div>
+    <div class="beats ruled">
+      <div class="beat reveal">
+        <span class="num">1</span>
+        <h3>Connect once</h3>
+        <p>Import supported credentials already stored on your Mac, connect an OAuth account, or paste an API key. Accounts and keys live side by side.</p>
+      </div>
+      <div class="beat reveal">
+        <span class="num">2</span>
+        <h3>Point compatible clients here</h3>
+        <p>Each configurable chat-completions client gets the same base URL — <code>127.0.0.1:4949/v1</code> — and one <code>rr-…</code> key. Switch providers inside ReRouted, not in every client.</p>
+      </div>
+      <div class="beat reveal">
+        <span class="num">3</span>
+        <h3>Route on purpose</h3>
+        <p>Make a route like <code>coding</code>: try models in order, or rotate across them. On a <code>429</code>, <code>5xx</code>, or timeout, it advances before output begins.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FEATURES (dark) ===================== -->
+<section class="band band-dark">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">What you actually get</span>
+      <h2 class="sec-title">The part you’ve <span class="em">wanted.</span></h2>
+    </div>
+    <div class="features">
+      <div class="feature reveal">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 7v6c0 2.8 2.2 5 5 5h11"/><path d="m16 13 4 4-4 4"/><circle cx="4" cy="7" r="2.4" fill="currentColor" stroke="none"/></svg></div>
+        <h3>One URL for compatible clients</h3>
+        <p>Reconfigure providers <b>inside ReRouted</b>, not across each editor, agent, and script that supports chat completions.</p>
+      </div>
+      <div class="feature reveal">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v4"/><path d="M12 3 8 7M12 3l4 4"/><path d="M5 12h14"/><path d="M6 12v4a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-4"/></svg></div>
+        <h3>Fallbacks you control</h3>
+        <p>Your preferred model goes first. Your escape hatches wait behind it. <b>You</b> set the order.</p>
+      </div>
+      <div class="feature reveal">
+        <div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 10h18"/><path d="M7 15h4"/></svg></div>
+        <h3>Accounts &amp; keys, together</h3>
+        <p>OAuth logins, imported CLI credentials, and API keys <b>coexist</b> — with automatic sibling-account fallback for OAuth providers.</p>
+      </div>
+      <div class="feature reveal">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 4-7 5 6"/><path d="M3 21h18"/></svg></div>
+        <h3>Traffic you can see</h3>
+        <p>Requests, failures, token counts, routes, and logs — <b>all in the menu-bar panel</b>. No dashboard tab to keep open.</p>
+      </div>
+      <div class="feature reveal">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9 9 9 0 0 0 9 9"/><path d="M12 3a9 9 0 0 1 9 9"/><circle cx="12" cy="12" r="3.2"/></svg></div>
+        <h3>Local by default</h3>
+        <p>The gateway binds to <b>localhost</b> until you deliberately expose it to your network. Credentials are stored locally and sent only to the upstream services you choose.</p>
+      </div>
+      <div class="feature reveal">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="16" r="3"/></svg></div>
+        <h3>No desktop bloat</h3>
+        <p>No Dock icon. No frontend framework. <b>Signed updates install from inside the app.</b> It lives quietly in the menu bar.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== PROVIDERS ===================== -->
+<section class="band" id="connect">
+  <div class="wrap">
+    <div class="sec-head center reveal">
+      <span class="eyebrow">What connects</span>
+      <h2 class="sec-title">Bring the accounts <span class="em">you already pay for.</span></h2>
+      <p class="sec-lead">Browser OAuth, auto-detected CLI logins, or plain API keys. Multiple OAuth accounts of the same provider coexist and fall through automatically.</p>
+    </div>
+    <div class="providers">
+      <div class="provider reveal"><div class="p-name">ChatGPT / Codex</div><div class="p-path">Browser OAuth · local credential import</div><span class="p-tag">oauth</span></div>
+      <div class="provider reveal"><div class="p-name">Claude</div><div class="p-path">Browser OAuth · local credential import</div><span class="p-tag">oauth</span></div>
+      <div class="provider reveal"><div class="p-name">Antigravity</div><div class="p-path">Browser OAuth · token-file detect</div><span class="p-tag">oauth</span></div>
+      <div class="provider reveal"><div class="p-name">xAI / Grok</div><div class="p-path">Browser OAuth</div><span class="p-tag">oauth</span></div>
+      <div class="provider reveal"><div class="p-name">OpenRouter</div><div class="p-path">API key</div><span class="p-tag key">api key</span></div>
+      <div class="provider reveal"><div class="p-name">NVIDIA NIM</div><div class="p-path">API key</div><span class="p-tag key">api key</span></div>
+      <div class="provider reveal"><div class="p-name">Cloudflare Workers AI</div><div class="p-path">Account ID · API key</div><span class="p-tag key">api key</span></div>
+      <div class="provider reveal"><div class="p-name">GLM Coding</div><div class="p-path">API key</div><span class="p-tag key">api key</span></div>
+    </div>
+    <p class="reveal" style="text-align:center;margin-top:22px;font-size:14.5px;color:var(--muted);">
+      …plus any custom OpenAI-compatible service — just a base URL and a key.
+    </p>
+  </div>
+</section>
+
+<!-- ===================== SETUP ===================== -->
+<section class="band band-dark" id="setup">
+  <div class="wrap setup-grid">
+    <div class="reveal">
+      <span class="eyebrow">Three minutes to useful</span>
+      <h2 class="sec-title" style="margin-bottom:26px;">Run one test. <span class="em">Done.</span></h2>
+      <ol class="setup-steps">
+        <li><div class="st-copy"><h4>Install &amp; launch</h4><p>Open the Apple Silicon DMG, drag to Applications, launch. Look up — it’s in the menu bar.</p></div></li>
+        <li><div class="st-copy"><h4>Connect an account</h4><p>Import local credentials, connect OAuth, or add a key.</p></div></li>
+        <li><div class="st-copy"><h4>Point your client here</h4><p>Copy the endpoint and generated <code style="font-family:var(--mono);color:#ffb694">rr-…</code> key from Home.</p></div></li>
+      </ol>
+    </div>
+    <div class="reveal">
+      <div class="codeblock">
+        <button class="copy-btn" id="copy-btn">Copy</button>
+        <div class="cb-top"><i></i><i></i><i></i><span>smoke test</span></div>
+<div class="cb-line" id="code-src"><span class="env">curl</span> <span class="val">http://127.0.0.1:4949/v1/chat/completions</span> \
+  -H <span class="val">"Authorization: Bearer rr-your-generated-key"</span> \
+  -H <span class="val">"Content-Type: application/json"</span> \
+  -d <span class="val">'{"model":"coding","messages":[{"role":"user","content":"Say hello."}]}'</span></div>
+      </div>
+      <p style="margin-top:16px;font-family:var(--mono);font-size:12px;color:rgba(236,232,221,0.5);line-height:1.6;">
+        Implements <b style="color:#f3efe5">GET /v1/models</b> and <b style="color:#f3efe5">POST /v1/chat/completions</b>, streaming included. A focused gateway — not a full clone of every OpenAI API.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== CLOSER ===================== -->
+<section class="closer ruled">
+  <div class="wrap">
+    <svg class="closer-mark reveal" viewBox="0 0 28 28" aria-hidden="true">
+      <path d="M5 5v6c0 2.2 1.8 4 4 4h10" />
+      <path d="m16 11 4 4-4 4" />
+      <circle cx="5" cy="5" r="2" />
+      <circle class="dim" cx="5" cy="23" r="2" />
+      <path d="M5 21v-2c0-2.2 1.8-4 4-4" style="stroke: var(--line-strong)" />
+    </svg>
+    <h2 class="reveal">Connect once. Route on purpose.<br /><span class="em">Stop babysitting provider failures.</span></h2>
+    <p class="reveal">The gateway you keep meaning to build — already sitting in your menu bar.</p>
+    <div class="hero-cta reveal">
+      <a class="btn btn-primary" href="https://github.com/gitcommit90/rerouted/releases/latest">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a1 1 0 0 1 1 1v6.09l1.8-1.8a1 1 0 1 1 1.4 1.42l-3.5 3.5a1 1 0 0 1-1.4 0l-3.5-3.5a1 1 0 1 1 1.4-1.42L7 8.59V2.5a1 1 0 0 1 1-1Z"/><path d="M2.5 13a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1Z"/></svg>
+        Download for Apple Silicon
+      </a>
+      <a class="btn btn-ghost" href="#how">How it works</a>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FOOTER ===================== -->
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <div class="foot-copy">
+      <b>ReRouted</b> — a local OpenAI-compatible LLM gateway.<br />
+      <span class="foot-mono">v0.3.1 · Apple Silicon · Developer ID signed · Apple notarized · In-app updates</span><br />
+      <span class="foot-mono">Released by <a href="https://publicbytes.org">Public Bytes</a>, a nonprofit building practical technology for public good.</span>
+    </div>
+    <div class="foot-links">
+      <a href="https://rerouted.dev">ReRouted.dev</a>
+      <a href="#how">How it works</a>
+      <a href="#connect">Providers</a>
+      <a href="#setup">Setup</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- nav shadow on scroll ---------- */
+  var nav = document.getElementById("nav");
+  var onScroll = function () { nav.classList.toggle("scrolled", window.scrollY > 8); };
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  /* ---------- reveal on scroll ---------- */
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+    });
+  }, { threshold: 0.16 });
+  document.querySelectorAll(".reveal").forEach(function (el, i) {
+    // gentle stagger inside grids
+    el.style.transitionDelay = (Math.min(i % 4, 3) * 60) + "ms";
+    io.observe(el);
+  });
+
+  /* ---------- copy button ---------- */
+  var copyBtn = document.getElementById("copy-btn");
+  copyBtn.addEventListener("click", function () {
+    var text = "curl http://127.0.0.1:4949/v1/chat/completions \\\n  -H \"Authorization: Bearer rr-your-generated-key\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\":\"coding\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello.\"}]}'";
+    navigator.clipboard && navigator.clipboard.writeText(text).then(function () {
+      copyBtn.textContent = "Copied ✓";
+      copyBtn.classList.add("done");
+      setTimeout(function () { copyBtn.textContent = "Copy"; copyBtn.classList.remove("done"); }, 1800);
+    });
+  });
+
+  /* =========================================================
+     THE LIVE DEMO — a request comes in, provider 1 rate-limits,
+     and ReRouted advances to provider 2 before output begins.
+     The endpoint and route stay unchanged. Loops forever.
+  ========================================================= */
+  if (reduce) return;
+
+  var rungs = Array.prototype.slice.call(document.querySelectorAll("#ladder .rung"));
+  var statuses = rungs.map(function (r) { return r.querySelector(".status"); });
+  var mark = document.getElementById("rrmark");
+  var outTxt = document.getElementById("out-txt");
+  var caret = document.getElementById("caret");
+  var rrCountEl = document.getElementById("rr-count");
+  var ladder = document.getElementById("ladder");
+  var rerouteTotal = 0;
+
+  // Each scenario: which rung wins (index), what the failing rungs report,
+  // and the tokens that stream back once a winner is found.
+  var SCENARIOS = [
+    { fails: [{ i: 0, code: "429 rate-limited" }], win: 1, tokens: "def rank(rows):\n    return sorted(rows, key=score)" },
+    { fails: [], win: 0, tokens: "Sure — here's the migration plan, step by step…" },
+    { fails: [{ i: 0, code: "429 quota" }, { i: 1, code: "503 upstream" }], win: 2, tokens: "// recovered on backup, streaming normally" },
+    { fails: [{ i: 0, code: "timeout" }], win: 1, tokens: "SELECT id, name FROM users WHERE active = true;" }
+  ];
+
+  function setStatus(i, text) { statuses[i].textContent = text; }
+  function clearRungs() {
+    rungs.forEach(function (r, i) {
+      r.className = "rung";
+      r.setAttribute("data-rung", i);
+      setStatus(i, "idle");
+    });
+    mark.classList.remove("show");
+  }
+  function positionMark(i) {
+    var rung = rungs[i];
+    // center the arrow vertically against the target rung, relative to ladder
+    var top = rung.offsetTop + (rung.offsetHeight / 2) - 9;
+    mark.style.top = top + "px";
+  }
+
+  var sIdx = 0;
+
+  function runScenario() {
+    var sc = SCENARIOS[sIdx % SCENARIOS.length];
+    sIdx++;
+    clearRungs();
+    outTxt.textContent = "";
+    caret.style.display = "inline-block";
+
+    var order = [];
+    // build the sequence of rungs we visit: each fail, then the winner
+    sc.fails.forEach(function (f) { order.push({ i: f.i, code: f.code, ok: false }); });
+    order.push({ i: sc.win, code: "200 streaming", ok: true });
+
+    var step = 0;
+    var t0 = 620; // let the request line settle
+
+    function visit() {
+      if (step >= order.length) { return; }
+      var node = order[step];
+      var i = node.i;
+
+      // mark this rung "trying"
+      rungs[i].classList.add("trying");
+      setStatus(i, "connecting…");
+
+      // show reroute arrow gliding to this rung (skip on very first attempt)
+      if (step > 0) {
+        positionMark(i);
+        mark.classList.add("show");
+      } else {
+        positionMark(i);
+      }
+
+      setTimeout(function () {
+        rungs[i].classList.remove("trying");
+        if (node.ok) {
+          rungs[i].classList.add("won");
+          setStatus(i, "200 · streaming");
+          mark.classList.remove("show");
+          streamTokens(sc.tokens);
+        } else {
+          rungs[i].classList.add("failed");
+          setStatus(i, node.code);
+          rerouteTotal++;
+          rrCountEl.textContent = rerouteTotal + (rerouteTotal === 1 ? " reroute" : " reroutes");
+          step++;
+          setTimeout(visit, 520);
+        }
+      }, 780);
+    }
+
+    setTimeout(visit, t0);
+  }
+
+  function streamTokens(text) {
+    var i = 0;
+    outTxt.textContent = "";
+    (function tick() {
+      if (i <= text.length) {
+        outTxt.textContent = text.slice(0, i);
+        i += (Math.random() > 0.7 ? 2 : 1);
+        setTimeout(tick, 26 + Math.random() * 34);
+      } else {
+        caret.style.display = "none";
+        // hold the finished frame, then loop
+        setTimeout(runScenario, 2600);
+      }
+    })();
+  }
+
+  // kick off once the demo scrolls into view
+  var demo = document.getElementById("demo");
+  var started = false;
+  var demoIO = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting && !started) { started = true; setTimeout(runScenario, 700); }
+    });
+  }, { threshold: 0.4 });
+  demoIO.observe(demo);
+})();
+</script>
+</body>
+</html>
