@@ -808,7 +808,8 @@ app.whenReady().then(async () => {
       document.querySelector('[data-keyed-preset="custom"]')?.click();
       if (
         !document.querySelector('[data-keyed-field="name"]') ||
-        !document.querySelector('[data-keyed-field="base"]')
+        !document.querySelector('[data-keyed-field="base"]') ||
+        !document.querySelector('[data-keyed-field="model"]')
       ) {
         throw new Error("Custom provider fields did not render");
       }

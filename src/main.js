@@ -40,10 +40,10 @@ const {
   redactLockedState,
 } = require("./lib/ipc-security");
 const { runProviderModelTest } = require("./lib/model-test");
+const { testKeyedProvider } = require("./lib/keyed-provider-test");
 const { createUpdateService } = require("./lib/updater");
 const { acquireSingleInstance } = require("./lib/single-instance");
 const { KEYED_PRESETS, ONBOARDING_STEPS, DEFAULT_PORT, OAUTH } = require("./lib/constants");
-const openaiCompat = require("./lib/providers/openai-compat");
 const { defaultModelsForType, listProviderModels, getAdapter } = require("./lib/providers");
 const {
   publicCombo,
@@ -624,13 +624,8 @@ function registerIpc() {
     return { ok: true, id: prov.id };
   });
 
-  handle("app:test-keyed-provider", async (_e, { baseUrl, apiKey }) => {
-    try {
-      const models = await openaiCompat.listModels({ baseUrl, apiKey });
-      return { ok: true, models };
-    } catch (e) {
-      return { ok: false, error: e.message };
-    }
+  handle("app:test-keyed-provider", async (_e, payload) => {
+    return testKeyedProvider(payload, { logger });
   });
 
   handle("app:remove-provider", async (_e, id) => {
