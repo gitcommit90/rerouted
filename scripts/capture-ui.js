@@ -816,6 +816,11 @@ app.whenReady().then(async () => {
       return true;
     })()
   `);
+  await capture(
+    "app-providers-custom-model.png",
+    "#add-panel [data-keyed-form] .card",
+    "#add-panel .action-panel"
+  );
   await win.webContents.executeJavaScript(`
     (async () => {
       document.querySelector('[data-keyed-preset="openrouter"]')?.click();
