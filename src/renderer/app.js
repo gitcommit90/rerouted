@@ -455,7 +455,7 @@ function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider add
               ? `<input class="input" data-keyed-field="name" placeholder="Name" />
                 <input class="input" data-keyed-field="base" placeholder="Base URL (https://…/v1)" />
                 <input class="input" data-keyed-field="model" placeholder="Exact model ID (if /models is unavailable)" />
-                <div class="card-sub">Optional. Enter one known model ID to test chat completions directly.</div>`
+                <div class="card-sub">Optional. Tests chat directly without /models.</div>`
               : ""
           }
           ${
