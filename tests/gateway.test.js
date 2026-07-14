@@ -766,7 +766,7 @@ describe("format translation", () => {
   it("Codex Responses receives reasoning.effort from OpenAI and Responses clients", () => {
     const fromOpenAi = chatgpt.toResponsesBody(
       { messages: [{ role: "user", content: "hi" }], reasoning_effort: "high" },
-      "gpt-5.5",
+      "gpt-5.6-sol",
       true
     );
     const fromResponses = chatgpt.toResponsesBody(
@@ -774,6 +774,7 @@ describe("format translation", () => {
       "gpt-5.5",
       true
     );
+    assert.equal(fromOpenAi.model, "gpt-5.6-sol");
     assert.deepEqual(fromOpenAi.reasoning, { effort: "high", summary: "auto" });
     assert.deepEqual(fromResponses.reasoning, { effort: "xhigh", summary: "auto" });
   });
@@ -963,7 +964,18 @@ describe("requested OAuth model catalogs", () => {
   it("ships the requested ChatGPT, Claude, Antigravity, and Grok models", () => {
     assert.deepEqual(
       OAUTH.chatgpt.models.map((model) => model.id),
-      ["gpt-5.6-sol-high", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"]
+      [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4-mini",
+        "gpt-5.4",
+      ]
+    );
+    assert.deepEqual(
+      OAUTH.chatgpt.models.slice(0, 3).map((model) => model.name),
+      ["GPT 5.6 Sol", "GPT 5.6 Terra", "GPT 5.6 Luna"]
     );
     assert.deepEqual(
       OAUTH.claude.models.map((model) => model.id),
@@ -992,8 +1004,35 @@ describe("requested OAuth model catalogs", () => {
       combos: [],
     });
     const models = cfg.providers[0].models;
-    assert.ok(models.some((model) => model.id === "gpt-5.6-sol-high" && model.enabled));
+    assert.ok(models.some((model) => model.id === "gpt-5.6-sol" && model.enabled));
     assert.equal(models.find((model) => model.id === "gpt-5.4").enabled, false);
+  });
+
+  it("renames the old Sol high catalog ID in providers and routes", () => {
+    const { migrate } = require("../src/lib/store");
+    const cfg = migrate({
+      providers: [
+        {
+          id: "prov_chatgpt",
+          type: "chatgpt",
+          models: [{ id: "gpt-5.6-sol-high", name: "GPT 5.6 Sol (High)", enabled: false }],
+          modelLocks: { "gpt-5.6-sol-high": { until: Date.now() + 60_000 } },
+        },
+      ],
+      combos: [
+        {
+          id: "coding",
+          name: "coding",
+          strategy: "fallback",
+          members: [{ providerId: "prov_chatgpt", model: "gpt-5.6-sol-high" }],
+        },
+      ],
+    });
+    const provider = cfg.providers[0];
+    assert.equal(provider.models.find((model) => model.id === "gpt-5.6-sol").enabled, false);
+    assert.equal(provider.models.some((model) => model.id === "gpt-5.6-sol-high"), false);
+    assert.ok(provider.modelLocks["gpt-5.6-sol"]);
+    assert.equal(cfg.combos[0].members[0].model, "gpt-5.6-sol");
   });
 });
 

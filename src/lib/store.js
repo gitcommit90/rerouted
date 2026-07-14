@@ -3,7 +3,12 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { generateApiKey, generateId } = require("./password");
-const { DEFAULT_PORT, OAUTH, RETIRED_OAUTH_MODELS } = require("./constants");
+const {
+  DEFAULT_PORT,
+  OAUTH,
+  RETIRED_OAUTH_MODELS,
+  OAUTH_MODEL_RENAMES,
+} = require("./constants");
 const { ensureUniqueComboNames, providerRouteIds } = require("./combos");
 const { backfillTokenIdentity } = require("./oauth-identity");
 
@@ -105,7 +110,23 @@ function mergeOAuthCatalog(provider) {
   if (!isOAuthProvider(provider)) return;
   const family = canonicalProviderType(provider.type);
   const catalog = OAUTH[family]?.models || [];
-  const existing = new Map((provider.models || []).map((model) => [model.id, model]));
+  const renames = OAUTH_MODEL_RENAMES[family] || {};
+  const existing = new Map();
+  for (const model of provider.models || []) {
+    const renamedId = renames[model.id] || model.id;
+    const current = existing.get(renamedId);
+    existing.set(renamedId, {
+      ...(current || {}),
+      ...model,
+      id: renamedId,
+    });
+  }
+  for (const [from, to] of Object.entries(renames)) {
+    if (provider.modelLocks?.[from] && !provider.modelLocks[to]) {
+      provider.modelLocks[to] = provider.modelLocks[from];
+    }
+    delete provider.modelLocks?.[from];
+  }
   const catalogIds = new Set(catalog.map((model) => model.id));
   const retiredIds = new Set(RETIRED_OAUTH_MODELS[family] || []);
   provider.models = [
@@ -202,6 +223,15 @@ function migrate(cfg) {
   ensureOAuthAliases(cfg.providers, cfg.providerAliasCounters);
 
   if (!Array.isArray(cfg.combos)) cfg.combos = [];
+  const providerById = new Map((cfg.providers || []).map((provider) => [provider.id, provider]));
+  for (const combo of cfg.combos) {
+    for (const member of combo.members || []) {
+      const provider = providerById.get(member.providerId);
+      const family = canonicalProviderType(provider?.type);
+      const rename = OAUTH_MODEL_RENAMES[family]?.[member.model];
+      if (rename) member.model = rename;
+    }
+  }
   if (needsComboNameMigration) {
     ensureUniqueComboNames(cfg.combos, providerRouteIds(cfg.providers));
   }
