@@ -453,7 +453,9 @@ function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider add
           ${
             isCustom
               ? `<input class="input" data-keyed-field="name" placeholder="Name" />
-                <input class="input" data-keyed-field="base" placeholder="Base URL (https://…/v1)" />`
+                <input class="input" data-keyed-field="base" placeholder="Base URL (https://…/v1)" />
+                <input class="input" data-keyed-field="model" placeholder="Exact model ID (if /models is unavailable)" />
+                <div class="card-sub">Optional. Tests chat directly without /models.</div>`
               : ""
           }
           ${
@@ -491,7 +493,13 @@ function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider add
           : (preset.baseUrl || "").replace("{account_id}", accountId());
       const inputs = [...form.querySelectorAll("[data-keyed-field]")];
       const fingerprint = () =>
-        JSON.stringify([presetId, baseUrl(), field("key").value.trim(), accountId()]);
+        JSON.stringify([
+          presetId,
+          baseUrl(),
+          field("key").value.trim(),
+          accountId(),
+          field("model")?.value?.trim() || "",
+        ]);
       let models = null;
       let testedFingerprint = null;
       let testGeneration = 0;
@@ -526,6 +534,7 @@ function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider add
           result = await api.invoke("app:test-keyed-provider", {
             baseUrl: baseUrl(),
             apiKey: field("key").value.trim(),
+            modelId: field("model")?.value?.trim() || "",
           });
         } catch (error) {
           result = { ok: false, error: error.message || "Test failed" };
@@ -541,7 +550,10 @@ function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider add
         }
         models = result.models || [];
         testedFingerprint = testedValues;
-        status.textContent = `OK — ${models.length} models`;
+        status.textContent =
+          result.validation === "chat-completions"
+            ? `OK — ${models[0]?.id || "model"} validated`
+            : `OK — ${models.length} models`;
         status.classList.add("ok");
         addButton.disabled = false;
       };
@@ -599,7 +611,7 @@ function renderApiKeys() {
   view.innerHTML = `
     ${stepProgress("api-keys")}
     <h1 class="h1">Add an API key</h1>
-    <p class="lead">Optional. Quick-add a known chat-completions provider, or enter a custom base URL. Custom providers must pass Fetch models before Add.</p>
+    <p class="lead">Optional. Quick-add a known chat-completions provider, or enter a custom base URL. Discover its models or validate one exact model ID before Add.</p>
     ${keyedProviderPickerHtml(presets)}
     <div class="btn-row">
       <button type="button" class="btn btn-secondary" id="btn-skip">Skip</button>
