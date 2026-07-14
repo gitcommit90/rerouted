@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./resources/brandMark@2x.png" width="64" height="64" alt="ReRouted logo" />
+  <img src="./resources/readme-logo.svg" width="64" height="64" alt="ReRouted logo" />
   <h1>ReRouted</h1>
   <p><strong>Stop rewiring your AI tools every time an account hits quota.</strong></p>
   <p>
