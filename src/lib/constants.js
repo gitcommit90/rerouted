@@ -49,7 +49,7 @@ const OAUTH = {
     },
     chatUrl: "https://chatgpt.com/backend-api/codex/responses",
     models: [
-      { id: "gpt-5.6-sol-high", name: "GPT 5.6 Sol (High)" },
+      { id: "gpt-5.6-sol", name: "GPT 5.6 Sol" },
       { id: "gpt-5.6-terra", name: "GPT 5.6 Terra" },
       { id: "gpt-5.6-luna", name: "GPT 5.6 Luna" },
       { id: "gpt-5.5", name: "GPT 5.5" },
@@ -134,7 +134,7 @@ const OAUTH = {
 // Catalog entries removed during config normalization. Only known defaults are
 // removed so user-added model IDs remain intact.
 const RETIRED_OAUTH_MODELS = {
-  chatgpt: ["gpt-5.3-codex"],
+  chatgpt: ["gpt-5.3-codex", "gpt-5.6-sol-high"],
   claude: [
     "claude-opus-4-6",
     "claude-sonnet-4-6",
@@ -143,6 +143,11 @@ const RETIRED_OAUTH_MODELS = {
   ],
   antigravity: ["gemini-3-flash"],
   xai: ["grok-4", "grok-code-fast-1", "grok-3"],
+};
+
+// Keep persisted configurations and routes compatible with the old catalog ID.
+const OAUTH_MODEL_RENAMES = {
+  chatgpt: { "gpt-5.6-sol-high": "gpt-5.6-sol" },
 };
 
 const ONBOARDING_STEPS = [
@@ -164,5 +169,6 @@ module.exports = {
   KEYED_PRESETS,
   OAUTH,
   RETIRED_OAUTH_MODELS,
+  OAUTH_MODEL_RENAMES,
   ONBOARDING_STEPS,
 };
