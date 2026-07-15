@@ -1,5 +1,7 @@
 "use strict";
 
+const { isCustomProviderType, customProviderModelId } = require("./model-ids");
+
 function publicComboId(combo) {
   const name = String(combo?.name || "").trim();
   return name || String(combo?.id || "");
@@ -31,6 +33,9 @@ function providerRouteIds(providers) {
       ids.add(modelId.toLowerCase());
       ids.add(`${type}/${modelId}`.toLowerCase());
       ids.add(`${family}/${modelId}`.toLowerCase());
+      if (isCustomProviderType(type)) {
+        ids.add(customProviderModelId(provider, modelId).toLowerCase());
+      }
       if (account) {
         ids.add(`${type}/${account}/${modelId}`.toLowerCase());
         ids.add(`${family}/${account}/${modelId}`.toLowerCase());

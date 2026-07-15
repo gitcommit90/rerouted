@@ -10,11 +10,13 @@ const {
   OAUTH_MODEL_RENAMES,
 } = require("./constants");
 const { ensureUniqueComboNames, providerRouteIds } = require("./combos");
+const { ensureUniqueCustomConnectionNames } = require("./model-ids");
 const { backfillTokenIdentity } = require("./oauth-identity");
 
-const CONFIG_VERSION = 7;
+const CONFIG_VERSION = 8;
 const COMBO_NAME_MIGRATION_VERSION = 5;
 const XAI_LOCK_RESET_VERSION = 6;
+const RETIRED_OAUTH_CLEANUP_VERSION = 8;
 const OAUTH_ALIAS_RE = /^oauth([1-9]\d*)$/;
 
 class ConfigLoadError extends Error {
@@ -106,7 +108,7 @@ function getActiveModelLock(provider, model, now = Date.now()) {
   return locks[0] || null;
 }
 
-function mergeOAuthCatalog(provider) {
+function mergeOAuthCatalog(provider, { removeRetired = false } = {}) {
   if (!isOAuthProvider(provider)) return;
   const family = canonicalProviderType(provider.type);
   const catalog = OAUTH[family]?.models || [];
@@ -136,7 +138,8 @@ function mergeOAuthCatalog(provider) {
       enabled: existing.get(model.id)?.enabled !== false,
     })),
     ...(provider.models || []).filter(
-      (model) => !catalogIds.has(model.id) && !retiredIds.has(model.id)
+      (model) =>
+        !catalogIds.has(model.id) && (!removeRetired || !retiredIds.has(model.id))
     ),
   ];
 }
@@ -173,6 +176,7 @@ function migrate(cfg) {
   const sourceVersion = Number(cfg.version) || 1;
   const needsComboNameMigration = sourceVersion < COMBO_NAME_MIGRATION_VERSION;
   const needsXaiLockReset = sourceVersion < XAI_LOCK_RESET_VERSION;
+  const needsRetiredOAuthCleanup = sourceVersion < RETIRED_OAUTH_CLEANUP_VERSION;
 
   if (!Array.isArray(cfg.providers)) cfg.providers = [];
 
@@ -217,12 +221,12 @@ function migrate(cfg) {
         enabled: m.enabled !== false,
       };
     });
-    mergeOAuthCatalog(p);
+    mergeOAuthCatalog(p, { removeRetired: needsRetiredOAuthCleanup });
   }
 
   ensureOAuthAliases(cfg.providers, cfg.providerAliasCounters);
-
   if (!Array.isArray(cfg.combos)) cfg.combos = [];
+  ensureUniqueCustomConnectionNames(cfg.providers, cfg.combos);
   const providerById = new Map((cfg.providers || []).map((provider) => [provider.id, provider]));
   for (const combo of cfg.combos) {
     for (const member of combo.members || []) {

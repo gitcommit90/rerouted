@@ -200,7 +200,14 @@ function errorMessageFromText(text, fallback = "") {
   try {
     const parsed = JSON.parse(text);
     const error = parsed?.error && typeof parsed.error === "object" ? parsed.error : parsed;
-    const parts = [error?.message, error?.type, error?.code, parsed?.message]
+    const parts = [
+      error?.message,
+      error?.detail,
+      error?.type,
+      error?.code,
+      parsed?.message,
+      parsed?.detail,
+    ]
       .filter((part) => typeof part === "string" && part.trim());
     if (parts.length) return [...new Set(parts)].join(" ");
     if (typeof parsed?.error === "string") return parsed.error;
@@ -216,6 +223,18 @@ function classifyFailure(status, errorText) {
     status === 429 ||
     /rate[ _-]?limit|too many requests|quota|usage[ _-]?limit|resource[ _-]?exhaust|capacity|overload/.test(text);
   if (quota) return { eligible: true, kind: "quota", defaultCooldownMs: COOLDOWN_MS.quota };
+  const capability =
+    (status === 400 || status === 404 || status === 422) &&
+    (/(?:unsupported|invalid|unknown)[ _-]?model|model[ _-]?(?:not[ _-]?found|unsupported|unavailable)/.test(
+      text
+    ) ||
+      /\bmodel\b.{0,160}\b(?:is |are )?(?:not supported|not available|unavailable|not found|unknown|does not exist)\b/.test(
+        text
+      ) ||
+      /\b(?:does not|doesn't|cannot|can't) support\b.{0,160}\bmodel\b/.test(text));
+  if (capability) {
+    return { eligible: true, kind: "capability", defaultCooldownMs: 0 };
+  }
   if (status === 401 || status === 403) {
     return { eligible: true, kind: "auth", defaultCooldownMs: COOLDOWN_MS.auth };
   }
@@ -623,7 +642,14 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
   }
 
   function persistModelLock(provider, upstreamModel, result) {
-    if (!provider?.id || !isOAuthProvider(provider) || !result?.fallbackEligible) return null;
+    if (
+      !provider?.id ||
+      !isOAuthProvider(provider) ||
+      !result?.fallbackEligible ||
+      result.failureKind === "capability"
+    ) {
+      return null;
+    }
     const now = Date.now();
     const until = result.resetAt || now + result.defaultCooldownMs;
     const lock = {
@@ -1128,6 +1154,7 @@ module.exports = {
   orderMembers,
   isRetryableStatus,
   classifyFailure,
+  errorMessageFromText,
   attemptLabel,
   parseResetHint,
   hasProductiveResponsesEvent,

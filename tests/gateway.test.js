@@ -241,7 +241,9 @@ describe("gateway auth + models + chat", () => {
     assert.ok(ids.includes("rr-combo"));
     assert.ok(!ids.includes("combo_fb"));
     assert.ok(!ids.includes("combo_rr"));
-    assert.ok(ids.some((i) => i.includes("mock-model")));
+    assert.ok(ids.includes("Mock A/custom/mock-model"));
+    assert.ok(ids.includes("Mock B/custom/mock-model"));
+    assert.ok(!ids.includes("openai-compat/mock_a/mock-model"));
   });
 
   it("non-streaming chat completion", async () => {
@@ -260,6 +262,19 @@ describe("gateway auth + models + chat", () => {
       },
     });
     assert.equal(r.status, 200);
+    assert.equal(r.json.choices[0].message.content, "Hello from mock");
+  });
+
+  it("keeps a legacy hash-qualified custom model id routable", async () => {
+    const r = await req("POST", "/v1/chat/completions", {
+      key: apiKey,
+      body: {
+        model: "openai-compat/mock_a/mock-model",
+        messages: [{ role: "user", content: "hi" }],
+        stream: false,
+      },
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(r.json.choices[0].message.content, "Hello from mock");
   });
 

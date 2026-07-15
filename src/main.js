@@ -46,6 +46,12 @@ const { acquireSingleInstance } = require("./lib/single-instance");
 const { KEYED_PRESETS, ONBOARDING_STEPS, DEFAULT_PORT, OAUTH } = require("./lib/constants");
 const { defaultModelsForType, listProviderModels, getAdapter } = require("./lib/providers");
 const {
+  customConnectionNameError,
+  customModelRouteConflict,
+  customProviderModelId,
+  isCustomProviderType,
+} = require("./lib/model-ids");
+const {
   publicCombo,
   comboMatchesId,
   publicRouteId,
@@ -608,6 +614,20 @@ function registerIpc() {
       type = preset;
     }
     if (!finalBase || !apiKey) return { ok: false, error: "Base URL and API key required" };
+    if (type === "custom") {
+      const current = store.load();
+      const nameError = customConnectionNameError(finalName, current.providers);
+      if (nameError) return { ok: false, error: nameError };
+      finalName = String(finalName).trim();
+      const conflict = customModelRouteConflict(finalName, models, current.combos);
+      if (conflict) {
+        const modelId = typeof conflict === "string" ? conflict : conflict.id;
+        return {
+          ok: false,
+          error: `A route named ${customProviderModelId({ name: finalName }, modelId)} already exists`,
+        };
+      }
+    }
     const prov = {
       id: generateId("prov"),
       type: type === "custom" ? "openai-compat" : type,
@@ -625,7 +645,8 @@ function registerIpc() {
   });
 
   handle("app:test-keyed-provider", async (_e, payload) => {
-    return testKeyedProvider(payload, { logger });
+    const adapter = getAdapter(payload?.providerType);
+    return testKeyedProvider(payload, { adapter: adapter || undefined, logger });
   });
 
   handle("app:remove-provider", async (_e, id) => {
@@ -795,6 +816,15 @@ function registerIpc() {
     const prov = (cfg.providers || []).find((p) => p.id === providerId);
     if (!prov) return { ok: false, error: "Provider not found" };
     if (prov.enabled === false) return { ok: false, error: "Provider is disabled" };
+    if (isCustomProviderType(prov.type)) {
+      const conflict = customModelRouteConflict(prov.name, [mid], cfg.combos);
+      if (conflict) {
+        return {
+          ok: false,
+          error: `A route named ${customProviderModelId(prov, mid)} already exists`,
+        };
+      }
+    }
 
     // Verify with a minimal non-stream chat request through the real adapter
     const adapter = getAdapter(prov.type);
@@ -826,6 +856,13 @@ function registerIpc() {
         if (m && typeof m !== "string") m.enabled = true;
       }
     });
+    const savedModel = store
+      .load()
+      .providers.find((provider) => provider.id === providerId)
+      ?.models?.find((model) => (typeof model === "string" ? model : model.id) === mid);
+    if (!savedModel || (typeof savedModel !== "string" && savedModel.enabled === false)) {
+      return { ok: false, error: "Model passed its test but could not be saved" };
+    }
     return { ok: true, modelId: mid };
   });
 
