@@ -95,6 +95,86 @@ describe("OAuth callback security", () => {
     }
   });
 
+  it("accepts the standalone code shown by xAI for the active PKCE session", async () => {
+    const started = await startOAuth("xai");
+    const session = getPending("xai");
+    let tokenRequest;
+    try {
+      const account = await completeOAuth("xai", {
+        pasteCode: "xai-provider-displayed-code",
+        fetchImpl: async (url, options) => {
+          tokenRequest = { url: String(url), options };
+          return {
+            ok: true,
+            async json() {
+              return {
+                access_token: "xai-access-token",
+                refresh_token: "xai-refresh-token",
+                expires_in: 3600,
+              };
+            },
+            async text() {
+              return "";
+            },
+          };
+        },
+      });
+
+      const body = new URLSearchParams(tokenRequest.options.body);
+      assert.equal(account.type, "xai");
+      assert.equal(tokenRequest.url, "https://auth.x.ai/oauth2/token");
+      assert.equal(body.get("grant_type"), "authorization_code");
+      assert.equal(body.get("code"), "xai-provider-displayed-code");
+      assert.equal(body.get("redirect_uri"), started.redirectUri);
+      assert.equal(body.get("code_verifier"), session.codeVerifier);
+    } finally {
+      clearPending("xai");
+    }
+  });
+
+  it("still rejects an xAI callback URL with a mismatched state", async () => {
+    const started = await startOAuth("xai");
+    let fetched = false;
+    try {
+      const callback = new URL(started.redirectUri);
+      callback.searchParams.set("code", "xai-authorization-code");
+      callback.searchParams.set("state", "wrong-state");
+      await assert.rejects(
+        completeOAuth("xai", {
+          pasteCode: callback.toString(),
+          fetchImpl: async () => {
+            fetched = true;
+            throw new Error("must not fetch");
+          },
+        }),
+        /OAuth state mismatch/
+      );
+      assert.equal(fetched, false);
+    } finally {
+      clearPending("xai");
+    }
+  });
+
+  it("explains that the xAI authorization URL is not a completion result", async () => {
+    const started = await startOAuth("xai");
+    let fetched = false;
+    try {
+      await assert.rejects(
+        completeOAuth("xai", {
+          pasteCode: started.authUrl,
+          fetchImpl: async () => {
+            fetched = true;
+            throw new Error("must not fetch");
+          },
+        }),
+        /does not contain an authorization code/
+      );
+      assert.equal(fetched, false);
+    } finally {
+      clearPending("xai");
+    }
+  });
+
   it("completes state-bound ChatGPT, Antigravity, and xAI callback flows", async () => {
     for (const type of ["chatgpt", "antigravity", "xai"]) {
       const started = await startOAuth(type);

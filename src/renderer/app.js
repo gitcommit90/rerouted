@@ -6,6 +6,7 @@ const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
 const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
 const { buildProviderCatalog } = window.ReroutedProviderCatalog;
+const { oauthPrompt } = window.ReroutedOAuthPrompt;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const nav = $("#nav");
@@ -291,7 +292,6 @@ function wireSecrets(root = view) {
   });
 }
 
-const PASTE_CODE_PLACEHOLDER = "Paste the full callback URL if prompted";
 const OAUTH_RISK_NOTICE =
   "Notice: This provider's subscription or OAuth session is not officially licensed for proxy or router use. Using it this way may result in account restrictions or bans. Proceed at your own risk.";
 
@@ -450,15 +450,17 @@ function renderOauthProviders() {
   view.querySelectorAll(".tile").forEach((btn) => {
     btn.onclick = async () => {
       const type = btn.dataset.type;
+      const prompt = oauthPrompt(type);
       const panel = $("#oauth-panel");
-      panel.innerHTML = `<div class="card"><div class="card-title">Signing in to ${esc(type)}…</div>
-        <div class="card-sub">Complete login in your browser, then click Finish connection.</div>
+      panel.innerHTML = `<div class="card"><div class="card-title">Signing in to ${esc(providerLabel(type))}…</div>
+        <div class="card-sub">${esc(prompt.instruction)}</div>
         ${oauthRiskNotice()}
         <div class="btn-row" style="margin-top:10px">
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-reopen">Open browser again</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-reopen">Restart sign-in</button>
           <button type="button" class="btn btn-primary btn-sm" id="btn-done">Finish connection</button>
         </div>
-        <input class="input" id="paste-code" placeholder="${PASTE_CODE_PLACEHOLDER}" style="margin-top:10px" />
+        <div class="oauth-paste-entry"><label class="label" for="paste-code">${esc(prompt.fieldLabel)}</label>
+        <input class="input" id="paste-code" placeholder="${esc(prompt.placeholder)}" autocomplete="off" /></div>
       </div>`;
       await api.invoke("app:oauth-start", type);
       $("#btn-reopen").onclick = () => api.invoke("app:oauth-start", type);
@@ -1067,21 +1069,21 @@ function startOauthFlow({ type, providerId, onDone, opener }) {
   box.className = "action-panel";
   box.setAttribute("role", "region");
   box.setAttribute("aria-labelledby", "oauth-panel-title");
-  const claudeHint =
-    type === "claude"
-      ? "After authorizing, paste the full localhost callback URL if the browser cannot return automatically."
-      : "Most providers return automatically. Paste the full callback URL only if automatic return fails.";
-  box.innerHTML = `<div class="action-panel-head"><div class="eyebrow">${providerId ? "Reconnect" : "New account"}</div><div class="action-panel-title" id="oauth-panel-title" data-panel-heading tabindex="-1">${esc(providerLabel(type))}</div><div class="action-panel-sub">Opening a secure browser session. ${esc(claudeHint)}</div></div>
+  const prompt = oauthPrompt(type);
+  const pasteField = `<div class="oauth-paste-entry"><label class="label" for="paste-code-oauth">${esc(prompt.fieldLabel)}</label>
+      <input class="input" id="paste-code-oauth" placeholder="${esc(prompt.placeholder)}" autocomplete="off" /></div>`;
+  box.innerHTML = `<div class="action-panel-head"><div class="eyebrow">${providerId ? "Reconnect" : "New account"}</div><div class="action-panel-title" id="oauth-panel-title" data-panel-heading tabindex="-1">${esc(providerLabel(type))}</div><div class="action-panel-sub">Opening a secure browser session. ${esc(prompt.instruction)}</div></div>
     ${oauthRiskNotice()}
     <div class="gateway-state"><span class="status-node"></span><span id="oauth-status-line">Starting OAuth…</span></div>
+    ${prompt.primaryPaste ? pasteField : ""}
     <details class="disclosure" style="margin:10px 0 0">
       <summary>Having trouble?</summary>
       <div class="disclosure-body"><div class="label">Authorization URL</div><div class="auth-url-box" id="oauth-url-display">Starting…</div>
-      <input class="input" id="paste-code-oauth" placeholder="${type === "claude" ? "Paste full localhost callback URL" : PASTE_CODE_PLACEHOLDER}" autocomplete="off" /></div>
+      ${prompt.primaryPaste ? "" : pasteField}</div>
     </details>
     <div class="btn-row">
       <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-oauth-url">Copy URL</button>
-      <button type="button" class="btn btn-secondary btn-sm" id="btn-reopen-oauth">Open browser</button>
+      <button type="button" class="btn btn-secondary btn-sm" id="btn-reopen-oauth">Restart sign-in</button>
       <button type="button" class="btn btn-secondary btn-sm" id="btn-oauth-logs">Logs</button>
     </div>
     <div class="btn-row">
@@ -1132,9 +1134,11 @@ function startOauthFlow({ type, providerId, onDone, opener }) {
     }
     lastAuthUrl = r.authUrl || "";
     disp.textContent = lastAuthUrl;
-    status.textContent = r.needsPaste
-      ? `Redirect: ${r.redirectUri || "—"} · after Authorize paste the full localhost callback URL`
-      : `Redirect: ${r.redirectUri || "—"} · waiting for browser callback`;
+    status.textContent = prompt.primaryPaste
+      ? prompt.status
+      : r.needsPaste
+        ? `Redirect: ${r.redirectUri || "—"} · ${prompt.status}`
+        : `Redirect: ${r.redirectUri || "—"} · waiting for browser callback`;
   }
   start().catch((e) => {
     if (!panelSession.closed) toast(e.message || "OAuth start failed");
