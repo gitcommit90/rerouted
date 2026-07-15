@@ -147,6 +147,16 @@ function seedOnboarded() {
         createdAt: now - 86_400_000,
       },
       {
+        id: "prov_chatgpt_demo_2",
+        type: "chatgpt",
+        name: "ChatGPT Team",
+        email: "cleverotter@proton.me",
+        enabled: true,
+        models: OAUTH.chatgpt.models,
+        accessToken: "x",
+        createdAt: now - 64_800_000,
+      },
+      {
         id: "prov_claude_demo",
         type: "claude",
         name: "Claude Pro",
@@ -535,7 +545,7 @@ app.whenReady().then(async () => {
     `);
     const selector = {
       home: ".hero-surface",
-      providers: "[data-prov-card]",
+      providers: ".provider-card-grid",
       combos: ".route-card",
       quota: ".quota-card",
       stats: "#u-period",
@@ -566,37 +576,47 @@ app.whenReady().then(async () => {
     if (p === "providers") {
       await win.webContents.executeJavaScript(`
         (() => {
-          const chatgpt = document.querySelector('[data-prov-card="prov_chatgpt_demo"]');
-          const claude = document.querySelector('[data-prov-card="prov_claude_demo"]');
-          const antigravity = document.querySelector('[data-prov-card="prov_antigravity_demo"]');
-          const xai = document.querySelector('[data-prov-card="prov_xai_demo"]');
-          if (!chatgpt || !claude || !antigravity || !xai) {
-            throw new Error("Identity fixtures did not render");
+          const cards = [...document.querySelectorAll("[data-provider-key]")];
+          const labels = cards.map((card) =>
+            card.querySelector(".provider-card-name")?.textContent.trim()
+          );
+          const expected = [
+            "ChatGPT",
+            "Claude",
+            "Antigravity",
+            "xAI (Grok)",
+            "OpenRouter",
+            "NVIDIA NIM",
+            "Cloudflare",
+            "GLM Coding",
+            "Custom"
+          ];
+          if (JSON.stringify(labels) !== JSON.stringify(expected)) {
+            throw new Error("Provider landing did not render the full catalog: " + labels.join(", "));
           }
-          if (!chatgpt.querySelector(".row-sub")?.textContent.includes("fant********@gmail.com")) {
-            throw new Error("Account email was not privacy masked");
+          if (document.querySelectorAll('[data-provider-key="chatgpt"]').length !== 1) {
+            throw new Error("ChatGPT accounts were not grouped under one provider card");
           }
-          if (antigravity.querySelector(".row-title")?.textContent.trim() !== "Antigravity") {
-            throw new Error("Email suffix was not removed from Antigravity account name");
+          const chatgpt = document.querySelector('[data-provider-key="chatgpt"]');
+          const openrouter = document.querySelector('[data-provider-key="openrouter"]');
+          if (!chatgpt?.querySelector(".provider-status")?.textContent.includes("2 accounts")) {
+            throw new Error("ChatGPT provider card did not report both connected accounts");
           }
-          if (!antigravity.querySelector(".row-sub")?.textContent.includes("grav********@example.com")) {
-            throw new Error("Antigravity account email was not privacy masked");
+          if (!openrouter?.querySelector(".provider-status")?.textContent.includes("Not connected")) {
+            throw new Error("Unconnected keyed provider was not shown as available");
           }
-          if (!claude.querySelector(".row-sub")?.textContent.includes("Route Fox")) {
-            throw new Error("Profile name was not used when account email was unavailable");
+          const logos = cards.map((card) => card.querySelector(".provider-logo img"));
+          if (logos.some((logo) => !logo || !logo.complete || logo.naturalWidth === 0)) {
+            throw new Error("One or more provider logos failed to load");
           }
-          const markup = chatgpt.outerHTML + antigravity.outerHTML;
-          if (markup.includes("fantasticfox@gmail.com") || markup.includes("gravitypilot@example.com")) {
-            throw new Error("Raw account email leaked into provider markup");
-          }
-          if (!chatgpt.querySelector(".alias-badge")?.textContent.includes("Account 1")) {
-            throw new Error("OAuth account alias was not preserved");
-          }
-          if (!xai.querySelector(".row-sub")?.textContent.includes("Account 1")) {
-            throw new Error("OAuth alias was not used when account identity was unavailable");
-          }
-          if (xai.querySelector(".account-copy")?.textContent.includes("prov_")) {
-            throw new Error("Internal provider id leaked into account copy");
+          const markup = document.querySelector(".provider-card-grid")?.outerHTML || "";
+          if (
+            markup.includes("fantasticfox@gmail.com") ||
+            markup.includes("cleverotter@proton.me") ||
+            markup.includes("gravitypilot@example.com") ||
+            markup.includes("prov_chatgpt_demo")
+          ) {
+            throw new Error("Account identity leaked into the provider landing markup");
           }
           return true;
         })()
@@ -669,13 +689,59 @@ app.whenReady().then(async () => {
   `);
 
   await win.webContents.executeJavaScript(`
-    (() => {
+    (async () => {
       window.__rr_goto_page("providers");
-      document.querySelector("[data-expand]")?.click();
+      const card = document.querySelector('[data-provider-key="chatgpt"]');
+      if (!card) throw new Error("ChatGPT provider card did not render");
+      card.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const accounts = [...document.querySelectorAll("[data-account-card]")];
+      if (
+        accounts.length !== 2 ||
+        !accounts.some((account) => account.dataset.accountCard === "prov_chatgpt_demo") ||
+        !accounts.some((account) => account.dataset.accountCard === "prov_chatgpt_demo_2")
+      ) {
+        throw new Error("Both ChatGPT accounts did not render in the provider detail");
+      }
+      const first = document.querySelector('[data-account-card="prov_chatgpt_demo"]');
+      const second = document.querySelector('[data-account-card="prov_chatgpt_demo_2"]');
+      if (!first?.querySelector(".row-sub")?.textContent.includes("fant********@gmail.com")) {
+        throw new Error("First ChatGPT account email was not privacy masked");
+      }
+      if (!second?.querySelector(".row-sub")?.textContent.includes("clev*******@proton.me")) {
+        throw new Error("Second ChatGPT account email was not privacy masked");
+      }
+      if (!first.querySelector(".alias-badge")?.textContent.includes("Account 1")) {
+        throw new Error("First ChatGPT OAuth alias was not preserved");
+      }
+      if (!second.querySelector(".alias-badge")?.textContent.includes("Account 2")) {
+        throw new Error("Second ChatGPT OAuth alias was not preserved");
+      }
+      const markup = document.querySelector(".provider-account-list")?.outerHTML || "";
+      if (markup.includes("fantasticfox@gmail.com") || markup.includes("cleverotter@proton.me")) {
+        throw new Error("Raw ChatGPT account email leaked into provider detail markup");
+      }
       return true;
     })()
   `);
-  await capture("app-providers-expanded.png", ".provider-detail");
+  await capture("app-providers-chatgpt.png", ".provider-account-list");
+
+  await win.webContents.executeJavaScript(`
+    (() => {
+      document.querySelector('[data-expand-account="prov_chatgpt_demo"]')?.click();
+      const detail = document.querySelector('[data-account-card="prov_chatgpt_demo"] .provider-detail');
+      if (!detail) throw new Error("ChatGPT account detail did not expand");
+      if (document.querySelectorAll("[data-account-card]").length !== 2) {
+        throw new Error("Expanding one account hid another account in the provider group");
+      }
+      return true;
+    })()
+  `);
+  await capture(
+    "app-providers-expanded.png",
+    '[data-account-card="prov_chatgpt_demo"] .provider-detail',
+    '[data-account-card="prov_chatgpt_demo"]'
+  );
 
   await win.webContents.executeJavaScript(`
     (async () => {
@@ -709,40 +775,53 @@ app.whenReady().then(async () => {
 
   await win.webContents.executeJavaScript(`
     (async () => {
-      window.__rr_goto_page("providers");
-      if (document.querySelector(".provider-detail")) {
-        document.querySelector("[data-expand]")?.click();
-      }
-      document.getElementById("btn-connect")?.click();
+      const opener = document.getElementById("btn-add-provider");
+      if (!opener) throw new Error("ChatGPT Add account action did not render");
+      opener.click();
       await new Promise((resolve) => setTimeout(resolve, 500));
       const panel = document.querySelector("#add-panel .action-panel");
       const viewport = document.getElementById("view").getBoundingClientRect();
       const rect = panel?.getBoundingClientRect();
-      if (!panel || !rect || rect.top < viewport.top || rect.bottom > viewport.bottom + 1) {
-        throw new Error("Connect options were not brought into view");
+      if (!panel || !rect || rect.top < viewport.top || rect.top >= viewport.bottom) {
+        throw new Error("OAuth add panel was not brought into view");
       }
       if (document.activeElement !== panel.querySelector("[data-panel-heading]")) {
-        throw new Error("Connect panel did not receive accessible focus");
+        throw new Error("OAuth add panel did not receive accessible focus");
+      }
+      if (panel.querySelector("[data-panel-heading]")?.textContent.trim() !== "ChatGPT") {
+        throw new Error("OAuth add panel was not scoped to ChatGPT");
       }
       return true;
     })()
   `);
-  await capture("app-providers-connect.png", "#add-panel .action-panel", "#add-panel .action-panel");
+  await capture(
+    "app-providers-oauth-add.png",
+    "#add-panel .action-panel",
+    "#add-panel .action-panel"
+  );
 
   await win.webContents.executeJavaScript(`
     (async () => {
-      const opener = document.getElementById("btn-connect");
+      const opener = document.getElementById("btn-add-provider");
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       if (document.querySelector("#add-panel .action-panel")) {
-        throw new Error("Escape did not dismiss Connect panel");
+        throw new Error("Escape did not dismiss OAuth add panel");
       }
       if (document.activeElement !== opener) {
-        throw new Error("Connect dismissal did not restore focus");
+        throw new Error("OAuth add dismissal did not restore focus");
       }
+      let deadline = Date.now() + 1000;
+      let cancels = await window.rerouted.invoke("harness:oauth-cancels");
+      while (cancels.length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        cancels = await window.rerouted.invoke("harness:oauth-cancels");
+      }
+      if (cancels.length !== 2 || cancels[1] !== "chatgpt") {
+        throw new Error("OAuth add dismissal did not cancel the pending flow");
+      }
+
       opener.click();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      document.querySelector("#add-panel .tile")?.click();
       await new Promise((resolve) => setTimeout(resolve, 20));
       const oauth = document.querySelector("#add-panel .action-panel");
       const cancel = oauth?.querySelector("[data-panel-cancel]");
@@ -754,62 +833,102 @@ app.whenReady().then(async () => {
       if (document.querySelector("#add-panel .action-panel") || document.activeElement !== opener) {
         throw new Error("OAuth Cancel did not dismiss and restore focus");
       }
-      const deadline = Date.now() + 1000;
-      let cancels = await window.rerouted.invoke("harness:oauth-cancels");
-      while (cancels.length < 2 && Date.now() < deadline) {
+      deadline = Date.now() + 1000;
+      cancels = await window.rerouted.invoke("harness:oauth-cancels");
+      while (cancels.length < 3 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
         cancels = await window.rerouted.invoke("harness:oauth-cancels");
       }
-      if (cancels.length !== 2 || cancels[1] !== "chatgpt") {
+      if (cancels.length !== 3 || cancels[2] !== "chatgpt") {
         throw new Error("OAuth dismissal did not cancel the pending flow");
       }
       const cancelRaces = await window.rerouted.invoke("harness:oauth-cancel-races");
       if (cancelRaces !== 0) {
         throw new Error("OAuth dismissal raced callback-session creation");
       }
-      opener.click();
-      await new Promise((resolve) => setTimeout(resolve, 500));
       return true;
     })()
   `);
 
   await win.webContents.executeJavaScript(`
     (async () => {
-      document.getElementById("btn-key")?.click();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const labels = [...document.querySelectorAll("[data-keyed-preset]")].map((button) =>
-        (button.textContent || "").trim()
-      );
-      const expected = ["OpenRouter", "NVIDIA NIM", "Cloudflare", "GLM Coding", "Custom"];
-      if (JSON.stringify(labels) !== JSON.stringify(expected)) {
-        throw new Error("Post-onboarding keyed presets did not render: " + labels.join(", "));
+      const inspectProvider = (key) => {
+        window.__rr_goto_page("providers");
+        const card = document.querySelector('[data-provider-key="' + key + '"]');
+        if (!card) throw new Error("Provider card did not render: " + key);
+        card.click();
+      };
+
+      inspectProvider("claude");
+      const claude = document.querySelector('[data-account-card="prov_claude_demo"]');
+      if (!claude?.querySelector(".row-sub")?.textContent.includes("Route Fox")) {
+        throw new Error("Profile name was not used when account email was unavailable");
       }
-      const panel = document.querySelector("#add-panel .action-panel");
-      if (!panel?.querySelector("[data-panel-cancel]")) {
-        throw new Error("API key panel did not render a Cancel action");
+
+      inspectProvider("antigravity");
+      const antigravity = document.querySelector('[data-account-card="prov_antigravity_demo"]');
+      if (antigravity?.querySelector(".row-title")?.textContent.trim() !== "Antigravity") {
+        throw new Error("Email suffix was not removed from Antigravity account name");
       }
-      if (document.activeElement !== panel.querySelector("[data-panel-heading]")) {
-        throw new Error("API key panel did not receive accessible focus");
+      if (!antigravity.querySelector(".row-sub")?.textContent.includes("grav********@example.com")) {
+        throw new Error("Antigravity account email was not privacy masked");
       }
-      return labels;
+      if (antigravity.outerHTML.includes("gravitypilot@example.com")) {
+        throw new Error("Raw Antigravity account email leaked into provider markup");
+      }
+
+      inspectProvider("xai");
+      const xai = document.querySelector('[data-account-card="prov_xai_demo"]');
+      if (!xai?.querySelector(".row-sub")?.textContent.includes("Account 1")) {
+        throw new Error("OAuth alias was not used when account identity was unavailable");
+      }
+      if (xai.querySelector(".account-copy")?.textContent.includes("prov_")) {
+        throw new Error("Internal provider id leaked into account copy");
+      }
+
+      inspectProvider("cloudflare");
+      document.getElementById("btn-add-provider")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const cloudflarePanel = document.querySelector("#add-panel .provider-scoped-panel");
+      const cloudflarePresets = [...cloudflarePanel.querySelectorAll("[data-keyed-preset]")];
+      if (
+        cloudflarePresets.length !== 1 ||
+        cloudflarePresets[0].dataset.keyedPreset !== "cloudflare" ||
+        !cloudflarePresets[0].classList.contains("selected")
+      ) {
+        throw new Error("Cloudflare add panel was not scoped to its keyed preset");
+      }
+      if (!cloudflarePanel.querySelector('[data-keyed-field="account"]')) {
+        throw new Error("Cloudflare preset did not request an account ID");
+      }
+      return true;
     })()
   `);
   await capture(
-    "app-providers-api-key.png",
-    "#add-panel [data-keyed-preset-grid]",
+    "app-providers-cloudflare-add.png",
+    "#add-panel .provider-scoped-panel",
     "#add-panel .action-panel"
   );
+
   await win.webContents.executeJavaScript(`
-    (() => {
-      document.querySelector('[data-keyed-preset="cloudflare"]')?.click();
-      if (!document.querySelector('[data-keyed-field="account"]')) {
-        throw new Error("Cloudflare preset did not request an account ID");
-      }
-      document.querySelector('[data-keyed-preset="custom"]')?.click();
+    (async () => {
+      window.__rr_goto_page("providers");
+      document.querySelector('[data-provider-key="custom"]')?.click();
+      document.getElementById("btn-add-provider")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const panel = document.querySelector("#add-panel .provider-scoped-panel");
+      const presets = [...panel.querySelectorAll("[data-keyed-preset]")];
       if (
-        !document.querySelector('[data-keyed-field="name"]') ||
-        !document.querySelector('[data-keyed-field="base"]') ||
-        !document.querySelector('[data-keyed-field="model"]')
+        presets.length !== 1 ||
+        presets[0].dataset.keyedPreset !== "custom" ||
+        !presets[0].classList.contains("selected")
+      ) {
+        throw new Error("Custom add panel was not scoped to the custom preset");
+      }
+      if (
+        !panel.querySelector('[data-keyed-field="name"]') ||
+        !panel.querySelector('[data-keyed-field="base"]') ||
+        !panel.querySelector('[data-keyed-field="model"]')
       ) {
         throw new Error("Custom provider fields did not render");
       }
@@ -821,26 +940,40 @@ app.whenReady().then(async () => {
     "#add-panel [data-keyed-form] .card",
     "#add-panel .action-panel"
   );
+
   await win.webContents.executeJavaScript(`
     (async () => {
-      document.querySelector('[data-keyed-preset="openrouter"]')?.click();
+      window.__rr_goto_page("providers");
+      document.querySelector('[data-provider-key="openrouter"]')?.click();
+      document.getElementById("btn-add-provider")?.click();
       await new Promise((resolve) => setTimeout(resolve, 400));
+      const panel = document.querySelector("#add-panel .provider-scoped-panel");
       const selected = document.querySelector('[data-keyed-preset="openrouter"]');
       const form = document.querySelector('[data-keyed-form] .card');
       const viewport = document.getElementById("view").getBoundingClientRect();
       const formRect = form?.getBoundingClientRect();
-      if (!selected?.classList.contains("selected")) {
-        throw new Error("Selected API preset was not highlighted");
+      if (
+        panel.querySelectorAll("[data-keyed-preset]").length !== 1 ||
+        !selected?.classList.contains("selected") ||
+        selected.getAttribute("aria-pressed") !== "true"
+      ) {
+        throw new Error("OpenRouter add panel was not scoped to its selected preset");
       }
       if (!formRect || formRect.top < viewport.top || formRect.bottom > viewport.bottom + 1) {
         throw new Error("Selected API preset form was not brought into view");
+      }
+      if (!panel.querySelector("[data-panel-cancel]")) {
+        throw new Error("Scoped API key panel did not render a Cancel action");
+      }
+      if (document.activeElement !== form.querySelector('[data-keyed-field="key"]')) {
+        throw new Error("Scoped API key form did not receive accessible focus");
       }
       return true;
     })()
   `);
   await capture(
-    "app-providers-api-key-form.png",
-    "#add-panel [data-keyed-form] .card",
+    "app-providers-api-key.png",
+    "#add-panel .provider-scoped-panel",
     "#add-panel .action-panel"
   );
   await win.webContents.executeJavaScript(`
