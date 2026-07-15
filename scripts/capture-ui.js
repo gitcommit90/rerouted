@@ -783,7 +783,7 @@ app.whenReady().then(async () => {
       const panel = document.querySelector("#add-panel .action-panel");
       const input = panel?.querySelector("#paste-code-oauth");
       const details = panel?.querySelector("details");
-      if (panel?.querySelector("[data-panel-heading]")?.textContent.trim() !== "xAI (Grok)") {
+      if (panel?.querySelector("[data-panel-heading]")?.textContent.trim() !== "xAI") {
         throw new Error("xAI OAuth add panel did not render");
       }
       if (!input || details?.contains(input)) {
