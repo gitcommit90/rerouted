@@ -689,6 +689,214 @@ summary:focus-visible,
   overflow: hidden;
 }
 
+.provider-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-left: 7px;
+}
+
+.provider-card {
+  display: flex;
+  min-width: 0;
+  min-height: 146px;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: var(--paper-strong);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.provider-card:hover {
+  border-color: rgba(239, 91, 42, 0.52);
+  box-shadow: 0 8px 20px rgba(58, 49, 35, 0.08);
+  transform: translateY(-1px);
+}
+
+.provider-card.connected {
+  background:
+    linear-gradient(145deg, rgba(239, 91, 42, 0.075), transparent 54%),
+    var(--paper-strong);
+}
+
+.provider-card-top,
+.provider-detail-summary,
+.provider-detail-summary-copy,
+.provider-status,
+.provider-card-action {
+  display: flex;
+  align-items: center;
+}
+
+.provider-card-top {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-logo-shell {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  overflow: hidden;
+  border: 1px solid rgba(27, 29, 24, 0.1);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 3px 9px rgba(32, 35, 29, 0.07);
+}
+
+.provider-logo-shell img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.provider-card-name {
+  margin-top: 12px;
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-card-copy {
+  display: -webkit-box;
+  min-height: 28px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.provider-card-action {
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  color: var(--route-dark);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 720;
+}
+
+.provider-status {
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 8.5px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.provider-status i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.provider-status.connected {
+  color: var(--pine);
+}
+
+.provider-status.connected i {
+  background: var(--pine);
+  box-shadow: 0 0 0 3px rgba(36, 116, 84, 0.1);
+}
+
+.provider-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 13px 7px;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.provider-back:hover {
+  color: var(--route-dark);
+}
+
+.provider-detail-summary {
+  gap: 11px;
+  margin: 0 0 6px 7px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(100deg, rgba(239, 91, 42, 0.07), transparent 58%),
+    var(--paper-strong);
+}
+
+.provider-logo-large {
+  width: 48px;
+  height: 48px;
+  flex-basis: 48px;
+  border-radius: 14px;
+}
+
+.provider-logo-large img {
+  width: 28px;
+  height: 28px;
+}
+
+.provider-detail-summary-copy {
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.account-provider-logo {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.account-provider-logo img {
+  width: 21px;
+  height: 21px;
+}
+
+.provider-account-list .empty {
+  margin-left: 7px;
+}
+
+.account-model-label {
+  margin-top: 12px;
+}
+
+.provider-scoped-key-form [data-keyed-preset-grid] {
+  display: none;
+}
+
+.provider-scoped-key-form .card {
+  margin-left: 0;
+}
+
 .account-head,
 .route-head {
   min-height: 68px;
@@ -1622,6 +1830,16 @@ summary:focus-visible,
 @keyframes draw-route {
   from { opacity: 0.25; transform: scaleX(0); }
   to { opacity: 1; transform: scaleX(1); }
+}
+
+@media (max-width: 360px) {
+  .provider-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-card {
+    min-height: 126px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -5,6 +5,7 @@ const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
   window.ReroutedAccountIdentity;
 const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
+const { buildProviderCatalog } = window.ReroutedProviderCatalog;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const nav = $("#nav");
@@ -42,7 +43,9 @@ function disposeProviderPanel({ restoreFocus = false, clear = true } = {}) {
   if (clear && current.mount?.isConnected) current.mount.replaceChildren();
   if (!restoreFocus) return;
   requestAnimationFrame(() => {
-    const fallback = document.querySelector("#btn-connect");
+    const fallback = document.querySelector(
+      "#btn-add-provider, [data-provider-back], [data-provider-key]"
+    );
     const target = current.opener?.isConnected ? current.opener : fallback;
     target?.focus({ preventScroll: true });
   });
@@ -107,8 +110,65 @@ const PROVIDER_LABELS = {
   "openai-compat": "API key",
 };
 
+const PROVIDER_PRESENTATION = {
+  chatgpt: {
+    description: "OpenAI subscription accounts",
+    logo: "chatgpt.svg",
+  },
+  claude: {
+    description: "Anthropic subscription accounts",
+    logo: "claude.svg",
+  },
+  antigravity: {
+    description: "Google Gemini subscription accounts",
+    logo: "antigravity.svg",
+  },
+  xai: {
+    description: "Grok subscription accounts",
+    logo: "xai.svg",
+  },
+  openrouter: {
+    description: "OpenRouter API keys",
+    logo: "openrouter.svg",
+  },
+  nvidia: {
+    description: "NVIDIA NIM API keys",
+    logo: "nvidia.svg",
+  },
+  cloudflare: {
+    description: "Cloudflare Workers AI keys",
+    logo: "cloudflare.svg",
+  },
+  glm: {
+    description: "Z.AI coding API keys",
+    logo: "glm.svg",
+  },
+  custom: {
+    description: "OpenAI-compatible endpoints",
+    logo: "custom.svg",
+  },
+};
+
 function providerLabel(type) {
   return PROVIDER_LABELS[type] || String(type || "Provider");
+}
+
+function providerPresentation(provider) {
+  return (
+    PROVIDER_PRESENTATION[provider?.id] || {
+      description: "Connected provider accounts",
+      logo: "custom.svg",
+    }
+  );
+}
+
+function providerLogoHtml(provider, className = "provider-logo") {
+  const presentation = providerPresentation(provider);
+  return `<span class="${esc(className)} provider-logo-shell provider-logo-${esc(
+    provider.id
+  )}" aria-hidden="true"><img src="assets/providers/${esc(
+    presentation.logo
+  )}" alt="" /></span>`;
 }
 
 function aliasLabel(alias) {
@@ -151,6 +211,10 @@ function wireSubnav() {
   view.querySelectorAll("[data-account-view]").forEach((button) => {
     button.onclick = () => {
       page = button.dataset.accountView;
+      if (page === "providers") {
+        selectedProviderKey = null;
+        expandedAccountId = null;
+      }
       render();
     };
   });
@@ -418,7 +482,7 @@ function renderOauthProviders() {
   $("#btn-next").onclick = () => goStep("api-keys");
 }
 
-function keyedProviderPickerHtml(presets) {
+function keyedProviderPickerHtml(presets, { includeCustom = true } = {}) {
   return `<div class="provider-grid" data-keyed-preset-grid>
     ${presets
       .map(
@@ -426,14 +490,22 @@ function keyedProviderPickerHtml(presets) {
           `<button type="button" class="tile" data-keyed-preset="${esc(preset.id)}" aria-pressed="false">${esc(preset.name)}</button>`
       )
       .join("")}
-    <button type="button" class="tile" data-keyed-preset="custom" aria-pressed="false">Custom</button>
+    ${
+      includeCustom
+        ? '<button type="button" class="tile" data-keyed-preset="custom" aria-pressed="false">Custom</button>'
+        : ""
+    }
   </div>
   <div data-keyed-form></div>`;
 }
 
-function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider added" } = {}) {
+function bindKeyedProviderPicker(
+  root,
+  { onAdded, successMessage = "Provider added", initialPresetId = null } = {}
+) {
   const presets = state.keyedPresets || [];
-  root.querySelectorAll("[data-keyed-preset]").forEach((button) => {
+  const pickerButtons = [...root.querySelectorAll("[data-keyed-preset]")];
+  pickerButtons.forEach((button) => {
     button.onclick = () => {
       const presetId = button.dataset.keyedPreset;
       const isCustom = presetId === "custom";
@@ -604,6 +676,9 @@ function bindKeyedProviderPicker(root, { onAdded, successMessage = "Provider add
       };
     };
   });
+  if (initialPresetId) {
+    pickerButtons.find((button) => button.dataset.keyedPreset === initialPresetId)?.click();
+  }
 }
 
 function renderApiKeys() {
@@ -981,7 +1056,8 @@ function updateHome() {
 }
 
 const OAUTH_TYPES = new Set(["chatgpt", "codex", "claude", "antigravity", "xai"]);
-let expandedProviderId = null;
+let selectedProviderKey = null;
+let expandedAccountId = null;
 
 function startOauthFlow({ type, providerId, onDone, opener }) {
   const panel = $("#add-panel") || $("#oauth-panel");
@@ -1097,98 +1173,230 @@ function startOauthFlow({ type, providerId, onDone, opener }) {
   };
 }
 
+function providerAccountHtml(account, provider) {
+  const open = expandedAccountId === account.id;
+  const models = account.models || [];
+  const onCount = models.filter((model) => model.enabled !== false).length;
+  const displayName = accountDisplayName(account.name, account.email, provider.name);
+  const identity = accountIdentityLabel(
+    account.email,
+    account.profileName,
+    account.accountAlias ? aliasLabel(account.accountAlias) : provider.name
+  );
+  return `
+    <section class="account-card group-list" data-account-card="${esc(account.id)}">
+      <div class="account-head" data-expand-account="${esc(account.id)}">
+        ${providerLogoHtml(provider, "account-provider-logo")}
+        <div class="account-copy">
+          <div class="row-title" title="${esc(displayName)}">${esc(displayName)}</div>
+          <div class="row-sub" title="${esc(identity)}">${esc(identity)} · ${onCount} of ${models.length} models enabled</div>
+        </div>
+        <div class="account-side">
+          ${account.accountAlias ? `<span class="alias-badge">${esc(aliasLabel(account.accountAlias))}</span>` : ""}
+          <label class="toggle" data-stop-expand="1"><input type="checkbox" data-en="${esc(account.id)}" ${account.enabled !== false ? "checked" : ""} /><span></span></label>
+          <span class="chevron">${open ? "−" : "+"}</span>
+        </div>
+      </div>
+      ${
+        open
+          ? `<div class="provider-detail">
+        <div class="provider-meta-line"><span class="pill">${esc(provider.name)}</span>${account.accountAlias ? `<span class="pill mono">${esc(account.accountAlias)}</span>` : ""}<span class="pill">${models.length} models</span></div>
+        ${
+          models.length
+            ? models
+                .map(
+                  (model) => `
+          <div class="model-row">
+            <div class="meta">
+              <div class="row-title">${esc(model.name || model.id)}</div>
+              <div class="model-id">${esc(model.gatewayId || model.id)}</div>
+            </div>
+            <label class="toggle" data-stop-expand="1"><input type="checkbox" data-model-en="${esc(account.id)}" data-mid="${esc(model.id)}" ${model.enabled !== false ? "checked" : ""} /><span></span></label>
+          </div>`
+                )
+                .join("")
+            : `<div class="empty">No models configured for this account.</div>`
+        }
+        <div class="label account-model-label">Add exact model ID</div>
+        <div class="copy-field"><input class="input" id="add-model-${esc(account.id)}" placeholder="provider-model-id" /><button type="button" class="btn btn-secondary btn-sm" data-add-model="${esc(account.id)}">Test &amp; add</button></div>
+        <div class="model-test-status" id="add-model-status-${esc(account.id)}" hidden></div>
+        <button type="button" class="btn btn-secondary btn-sm model-error-copy" data-copy-model-error="${esc(account.id)}" hidden>Copy full error</button>
+        <div class="action-row">
+          ${
+            OAUTH_TYPES.has(account.type)
+              ? `<button type="button" class="btn btn-secondary btn-sm" data-reauth="${esc(account.id)}" data-type="${esc(account.type === "codex" ? "chatgpt" : account.type)}">Reconnect</button>`
+              : ""
+          }
+          <button type="button" class="btn btn-danger btn-sm" data-del="${esc(account.id)}">Disconnect</button>
+        </div>
+      </div>`
+          : ""
+      }
+    </section>`;
+}
+
+function providerLandingHtml(catalog) {
+  return `
+    ${pageHeader("Sources", "Accounts", "Choose a provider, then add or manage as many accounts and API keys as you need.")}
+    ${accountSubnav("providers")}
+    <div class="provider-card-grid">
+      ${catalog
+        .map((provider) => {
+          const count = provider.accounts.length;
+          const status = count
+            ? `${count} account${count === 1 ? "" : "s"}`
+            : "Not connected";
+          return `<button type="button" class="provider-card ${count ? "connected" : ""}" data-provider-key="${esc(provider.id)}">
+            <span class="provider-card-top">
+              ${providerLogoHtml(provider)}
+              <span class="provider-status ${count ? "connected" : ""}"><i></i>${esc(status)}</span>
+            </span>
+            <span class="provider-card-name">${esc(provider.name)}</span>
+            <span class="provider-card-copy">${esc(providerPresentation(provider).description)}</span>
+            <span class="provider-card-action">${count ? "Manage" : "Connect"}<span aria-hidden="true">→</span></span>
+          </button>`;
+        })
+        .join("")}
+    </div>`;
+}
+
+function providerDetailHtml(provider) {
+  const count = provider.accounts.length;
+  const addLabel = provider.kind === "oauth" ? "Add account" : "Add key";
+  const canAdd = provider.kind !== "unknown";
+  return `
+    <button type="button" class="provider-back" data-provider-back><span aria-hidden="true">←</span> All providers</button>
+    ${pageHeader(
+      "Provider",
+      provider.name,
+      `${providerPresentation(provider).description}. ${count ? `${count} connected.` : "Nothing connected yet."}`,
+      canAdd
+        ? `<button type="button" class="btn btn-primary btn-sm" id="btn-add-provider">${esc(addLabel)}</button>`
+        : ""
+    )}
+    ${accountSubnav("providers")}
+    <div class="provider-detail-summary">
+      ${providerLogoHtml(provider, "provider-logo-large")}
+      <div class="provider-detail-summary-copy">
+        <div class="row-title">${esc(provider.name)}</div>
+        <div class="row-sub">${esc(count ? `${count} connected account${count === 1 ? "" : "s"}` : "Ready when you are")}</div>
+      </div>
+      <span class="provider-status ${count ? "connected" : ""}"><i></i>${count ? "Connected" : "Available"}</span>
+    </div>
+    ${sectionHeader("Accounts & keys", count ? `${count} connected` : "None connected")}
+    <div class="provider-account-list">
+      ${
+        count
+          ? provider.accounts.map((account) => providerAccountHtml(account, provider)).join("")
+          : `<div class="empty">No ${provider.kind === "oauth" ? "accounts" : "keys"} connected for ${esc(provider.name)} yet.</div>`
+      }
+    </div>
+    ${
+      provider.kind === "unknown"
+        ? `<div class="footer-note">This existing provider can be managed here, but its connection method is no longer in the current catalog.</div>`
+        : ""
+    }
+    <div id="add-panel"></div>`;
+}
+
+function openProviderAddPanel(provider, opener) {
+  if (provider.kind === "oauth") {
+    startOauthFlow({
+      type: provider.oauthType || provider.id,
+      onDone: async () => {
+        await refresh();
+        renderProviders();
+      },
+      opener,
+    });
+    return;
+  }
+  if (provider.kind !== "keyed" && provider.kind !== "custom") return;
+
+  const panel = $("#add-panel");
+  const preset = (state.keyedPresets || []).find((item) => item.id === provider.id);
+  const isCustom = provider.kind === "custom";
+  disposeProviderPanel({ clear: true });
+  panel.innerHTML = `
+    <div class="action-panel provider-scoped-panel" role="region" aria-labelledby="key-panel-title">
+      <div class="action-panel-head"><div class="eyebrow">New API key</div><div class="action-panel-title" id="key-panel-title" data-panel-heading tabindex="-1">${esc(provider.name)}</div><div class="action-panel-sub">Add another key without leaving this provider.</div></div>
+      <div class="provider-scoped-key-form">
+        ${keyedProviderPickerHtml(preset ? [preset] : [], { includeCustom: isCustom })}
+      </div>
+      <button type="button" class="btn btn-ghost panel-cancel" data-panel-cancel>Cancel</button>
+    </div>`;
+  activateProviderPanel({ mount: panel, panel: panel.querySelector(".action-panel"), opener });
+  panel.querySelector("[data-panel-cancel]").onclick = () => {
+    disposeProviderPanel({ restoreFocus: true });
+  };
+  bindKeyedProviderPicker(panel, {
+    initialPresetId: isCustom ? "custom" : provider.id,
+    successMessage: `${provider.name} key connected`,
+    onAdded: async () => {
+      disposeProviderPanel({ clear: true });
+      renderProviders();
+    },
+  });
+}
+
 function renderProviders() {
   if (blockSensitiveRenderIfLocked()) return;
   disposeProviderPanel({ clear: false });
-  const list = state.providers || [];
-  view.innerHTML = `
-    ${pageHeader("Sources", "Accounts", "Connect subscriptions and API keys, then choose exactly which models are available.", '<button type="button" class="btn btn-primary btn-sm" id="btn-connect">Connect</button>')}
-    ${accountSubnav("providers")}
-    ${
-      list.length
-        ? list
-            .map((p) => {
-              const open = expandedProviderId === p.id;
-              const models = p.models || [];
-              const onCount = models.filter((m) => m.enabled !== false).length;
-              const glyphClass = OAUTH_TYPES.has(p.type) ? p.type : "keyed";
-              const glyph = providerLabel(p.type).slice(0, 2).toUpperCase();
-              const displayName = accountDisplayName(
-                p.name,
-                p.email,
-                providerLabel(p.type)
-              );
-              const identity = accountIdentityLabel(
-                p.email,
-                p.profileName,
-                p.accountAlias ? aliasLabel(p.accountAlias) : providerLabel(p.type)
-              );
-              return `
-      <section class="account-card group-list" data-prov-card="${esc(p.id)}">
-        <div class="account-head" data-expand="${esc(p.id)}">
-          <div class="account-glyph ${esc(glyphClass)}">${esc(glyph)}</div>
-          <div class="account-copy">
-            <div class="row-title" title="${esc(displayName)}">${esc(displayName)}</div>
-            <div class="row-sub" title="${esc(identity)}">${esc(identity)} · ${onCount} of ${models.length} models enabled</div>
-          </div>
-          <div class="account-side">
-            ${p.accountAlias ? `<span class="alias-badge">${esc(aliasLabel(p.accountAlias))}</span>` : ""}
-            <label class="toggle" data-stop-expand="1"><input type="checkbox" data-en="${esc(p.id)}" ${p.enabled !== false ? "checked" : ""} /><span></span></label>
-            <span class="chevron">${open ? "−" : "+"}</span>
-          </div>
-        </div>
-        ${
-          open
-            ? `<div class="provider-detail">
-          <div class="provider-meta-line"><span class="pill">${esc(providerLabel(p.type))}</span>${p.accountAlias ? `<span class="pill mono">${esc(p.accountAlias)}</span>` : ""}<span class="pill">${models.length} models</span></div>
-          ${
-            models.length
-              ? models
-                  .map(
-                    (m) => `
-            <div class="model-row">
-              <div class="meta">
-                <div class="row-title">${esc(m.name || m.id)}</div>
-                <div class="model-id">${esc(m.gatewayId || m.id)}</div>
-              </div>
-              <label class="toggle" data-stop-expand="1"><input type="checkbox" data-model-en="${esc(p.id)}" data-mid="${esc(m.id)}" ${m.enabled !== false ? "checked" : ""} /><span></span></label>
-            </div>`
-                  )
-                  .join("")
-              : `<div class="empty">No models configured for this account.</div>`
-          }
-          <div class="label" style="margin-top:12px">Add exact model ID</div>
-          <div class="copy-field"><input class="input" id="add-model-${esc(p.id)}" placeholder="provider-model-id" /><button type="button" class="btn btn-secondary btn-sm" data-add-model="${esc(p.id)}">Test &amp; add</button></div>
-          <div class="model-test-status" id="add-model-status-${esc(p.id)}" hidden></div>
-          <button type="button" class="btn btn-secondary btn-sm model-error-copy" data-copy-model-error="${esc(p.id)}" hidden>Copy full error</button>
-          <div class="action-row">
-            ${
-              OAUTH_TYPES.has(p.type)
-                ? `<button type="button" class="btn btn-secondary btn-sm" data-reauth="${esc(p.id)}" data-type="${esc(p.type === "codex" ? "chatgpt" : p.type)}">Reconnect</button>`
-                : ""
-            }
-            <button type="button" class="btn btn-danger btn-sm" data-del="${esc(p.id)}">Disconnect</button>
-          </div>
-        </div>`
-            : ""
-        }
-      </section>`;
-            })
-            .join("")
-        : `<div class="empty">No accounts connected. Connect a subscription or API key to begin routing.</div>`
-    }
-    <div id="add-panel"></div>
-  `;
-  wireSubnav();
-  // Toggles must not trigger card expand (and CSP blocks inline onclick)
-  view.querySelectorAll("[data-stop-expand]").forEach((el) => {
-    el.addEventListener("click", (e) => e.stopPropagation());
+  const catalog = buildProviderCatalog({
+    oauthProviders: state.oauthProviders || [],
+    keyedPresets: state.keyedPresets || [],
+    providers: state.providers || [],
   });
-  view.querySelectorAll("[data-expand]").forEach((el) => {
-    el.onclick = (e) => {
-      if (e.target.closest("[data-stop-expand], .toggle, input, button, label")) return;
-      const id = el.dataset.expand;
-      expandedProviderId = expandedProviderId === id ? null : id;
+  let selectedProvider = selectedProviderKey
+    ? catalog.find((provider) => provider.id === selectedProviderKey)
+    : null;
+  if (selectedProviderKey && !selectedProvider) {
+    selectedProviderKey = null;
+    expandedAccountId = null;
+    selectedProvider = null;
+  }
+  view.innerHTML = selectedProvider
+    ? providerDetailHtml(selectedProvider)
+    : providerLandingHtml(catalog);
+  wireSubnav();
+
+  view.querySelectorAll("[data-provider-key]").forEach((card) => {
+    card.onclick = () => {
+      selectedProviderKey = card.dataset.providerKey;
+      expandedAccountId = null;
+      renderProviders();
+      view.scrollTop = 0;
+      requestAnimationFrame(() => {
+        view.querySelector("[data-provider-back]")?.focus({ preventScroll: true });
+      });
+    };
+  });
+  view.querySelector("[data-provider-back]")?.addEventListener("click", () => {
+    const previousProviderKey = selectedProviderKey;
+    selectedProviderKey = null;
+    expandedAccountId = null;
+    renderProviders();
+    view.scrollTop = 0;
+    requestAnimationFrame(() => {
+      [...view.querySelectorAll("[data-provider-key]")]
+        .find((card) => card.dataset.providerKey === previousProviderKey)
+        ?.focus({ preventScroll: true });
+    });
+  });
+  const addProviderButton = $("#btn-add-provider");
+  if (addProviderButton && selectedProvider) {
+    addProviderButton.onclick = () => openProviderAddPanel(selectedProvider, addProviderButton);
+  }
+
+  // Toggles must not trigger account expansion (and CSP blocks inline onclick).
+  view.querySelectorAll("[data-stop-expand]").forEach((el) => {
+    el.addEventListener("click", (event) => event.stopPropagation());
+  });
+  view.querySelectorAll("[data-expand-account]").forEach((el) => {
+    el.onclick = (event) => {
+      if (event.target.closest("[data-stop-expand], .toggle, input, button, label")) return;
+      const id = el.dataset.expandAccount;
+      expandedAccountId = expandedAccountId === id ? null : id;
       renderProviders();
     };
   });
@@ -1248,7 +1456,7 @@ function renderProviders() {
       status.classList.add("ok");
       toast("Model added");
       await refresh();
-      expandedProviderId = pid;
+      expandedAccountId = pid;
       renderProviders();
     };
   });
@@ -1287,57 +1495,6 @@ function renderProviders() {
       toast("Account disconnected");
     };
   });
-  $("#btn-connect").onclick = () => {
-    const opener = $("#btn-connect");
-    const panel = $("#add-panel");
-    disposeProviderPanel({ clear: true });
-    const listO = state.oauthProviders || [];
-    panel.innerHTML = `
-      <div class="action-panel" role="region" aria-labelledby="connect-panel-title">
-        <div class="action-panel-head"><div class="eyebrow">New source</div><div class="action-panel-title" id="connect-panel-title" data-panel-heading tabindex="-1">Connect an account</div><div class="action-panel-sub">Use a subscription login or bring an API key for a supported chat-completions provider.</div></div>
-        ${oauthRiskNotice()}
-        <div class="provider-grid">
-        ${listO.map((p) => `<button type="button" class="tile" data-type="${esc(p.id)}">${esc(p.name)}</button>`).join("")}
-        </div>
-        <button type="button" class="btn btn-secondary" id="btn-key">Connect an API key</button>
-        <button type="button" class="btn btn-ghost panel-cancel" data-panel-cancel>Cancel</button>
-      </div>
-      <div id="oauth-panel"></div>`;
-    activateProviderPanel({ mount: panel, panel: panel.querySelector(".action-panel"), opener });
-    panel.querySelector("[data-panel-cancel]").onclick = () => {
-      disposeProviderPanel({ restoreFocus: true });
-    };
-    view.querySelectorAll("#add-panel .tile").forEach((btn) => {
-      btn.onclick = () => {
-        startOauthFlow({
-          type: btn.dataset.type,
-          onDone: async () => {
-            await refresh();
-            renderProviders();
-          },
-          opener,
-        });
-      };
-    });
-    $("#btn-key").onclick = () => {
-      const presets = state.keyedPresets || [];
-      disposeProviderPanel({ clear: true });
-      panel.innerHTML = `
-        <div class="action-panel" role="region" aria-labelledby="key-panel-title">
-          <div class="action-panel-head"><div class="eyebrow">API source</div><div class="action-panel-title" id="key-panel-title" data-panel-heading tabindex="-1">Connect an API key</div><div class="action-panel-sub">Choose a preset or bring an endpoint that exposes the supported chat-completions shape. ReRouted tests it before adding its models.</div></div>
-          ${keyedProviderPickerHtml(presets)}
-          <button type="button" class="btn btn-ghost panel-cancel" data-panel-cancel>Cancel</button>
-        </div>`;
-      activateProviderPanel({ mount: panel, panel: panel.querySelector(".action-panel"), opener });
-      panel.querySelector("[data-panel-cancel]").onclick = () => {
-        disposeProviderPanel({ restoreFocus: true });
-      };
-      bindKeyedProviderPicker(panel, {
-        successMessage: "API source connected",
-        onAdded: () => renderProviders(),
-      });
-    };
-  };
 }
 
 function memberKey(m) {
@@ -2100,6 +2257,10 @@ function render() {
 nav.querySelectorAll(".nav-btn").forEach((btn) => {
   btn.onclick = () => {
     page = btn.dataset.page;
+    if (page === "providers") {
+      selectedProviderKey = null;
+      expandedAccountId = null;
+    }
     if (page !== "combos") comboDraft = null;
     render();
   };
@@ -2156,6 +2317,10 @@ window.__rr_boot = boot;
 window.__rr_render = render;
 window.__rr_goto_page = (p) => {
   page = p;
+  if (page === "providers") {
+    selectedProviderKey = null;
+    expandedAccountId = null;
+  }
   render();
 };
 boot();
