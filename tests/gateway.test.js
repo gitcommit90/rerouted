@@ -1118,6 +1118,10 @@ describe("oauth code normalize", () => {
     assert.equal(local.code, "abc");
     assert.equal(local.state, "xyz");
     assert.equal(normalizeAuthCode("  plain  ").code, "plain");
+    assert.deepEqual(normalizeAuthCode("https://auth.x.ai/oauth2/authorize?state=st"), {
+      code: "",
+      state: "st",
+    });
   });
 });
 

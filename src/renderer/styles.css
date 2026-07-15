@@ -1044,6 +1044,10 @@ summary:focus-visible,
   color: var(--muted);
 }
 
+.oauth-paste-entry {
+  margin-top: 10px;
+}
+
 .panel-cancel {
   width: 100%;
   margin-top: 7px;

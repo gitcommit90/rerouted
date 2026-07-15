@@ -775,6 +775,55 @@ app.whenReady().then(async () => {
 
   await win.webContents.executeJavaScript(`
     (async () => {
+      document.querySelector("[data-provider-back]")?.click();
+      document.querySelector('[data-provider-key="xai"]')?.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      document.getElementById("btn-add-provider")?.click();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const panel = document.querySelector("#add-panel .action-panel");
+      const input = panel?.querySelector("#paste-code-oauth");
+      const details = panel?.querySelector("details");
+      if (panel?.querySelector("[data-panel-heading]")?.textContent.trim() !== "xAI (Grok)") {
+        throw new Error("xAI OAuth add panel did not render");
+      }
+      if (!input || details?.contains(input)) {
+        throw new Error("xAI authorization code input was hidden under troubleshooting");
+      }
+      if (!input.previousElementSibling?.textContent.includes("Authorization code")) {
+        throw new Error("xAI authorization code input was not clearly labeled");
+      }
+      if (!panel.querySelector("#oauth-status-line")?.textContent.includes("authorization code")) {
+        throw new Error("xAI OAuth status did not request the displayed code");
+      }
+      return true;
+    })()
+  `);
+  await capture(
+    "app-providers-xai-oauth-add.png",
+    "#add-panel .action-panel",
+    "#add-panel .action-panel"
+  );
+
+  await win.webContents.executeJavaScript(`
+    (async () => {
+      const input = document.querySelector("#paste-code-oauth");
+      const finish = document.querySelector("#btn-done-oauth");
+      if (!input || !finish) throw new Error("xAI OAuth completion controls disappeared");
+      input.value = "captured-xai-code";
+      finish.click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (document.querySelector("#add-panel .action-panel")) {
+        throw new Error("xAI OAuth panel did not complete cleanly");
+      }
+      document.querySelector("[data-provider-back]")?.click();
+      document.querySelector('[data-provider-key="chatgpt"]')?.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()
+  `);
+
+  await win.webContents.executeJavaScript(`
+    (async () => {
       const opener = document.getElementById("btn-add-provider");
       if (!opener) throw new Error("ChatGPT Add account action did not render");
       opener.click();

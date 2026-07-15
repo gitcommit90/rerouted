@@ -120,16 +120,18 @@ function normalizeAuthCode(raw) {
   ) {
     s = s.slice(1, -1).trim();
   }
-  // full URL with ?code=
-  try {
-    if (/^https?:\/\//i.test(s) || s.includes("code=")) {
+  // Full callback URL or query string with ?code=.
+  const callbackLike = /^https?:\/\//i.test(s) || s.includes("code=");
+  if (callbackLike) {
+    try {
       const u = new URL(s.includes("://") ? s : `http://local/?${s.replace(/^\?/, "")}`);
       const code = u.searchParams.get("code") || "";
       const state = u.searchParams.get("state") || "";
       if (code) return { code: decodeURIComponent(code), state: state || "" };
+      return { code: "", state };
+    } catch {
+      return { code: "", state: "" };
     }
-  } catch {
-    /* fall through */
   }
   // Claude: code#state
   if (s.includes("#")) {
@@ -137,6 +139,22 @@ function normalizeAuthCode(raw) {
     return { code: s.slice(0, i).trim(), state: s.slice(i + 1).trim() };
   }
   return { code: s, state: "" };
+}
+
+function isStandaloneAuthCode(raw) {
+  let s = String(raw || "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  return !!s && !/^https?:\/\//i.test(s) && !s.includes("code=") && !s.includes("#");
+}
+
+function isCallbackLikeInput(raw) {
+  const s = String(raw || "").trim().replace(/^(?:"|')|(?:"|')$/g, "");
+  return /^https?:\/\//i.test(s) || s.includes("code=");
 }
 
 function callbackPage(result) {
@@ -482,6 +500,8 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
 
   let code = session?.code;
   let returnedState = session?.callbackState || "";
+  let acceptsActivePkceSession = false;
+  let callbackInputMissingCode = false;
   if (pasteCode) {
     const n = normalizeAuthCode(pasteCode);
     logger.oauth("paste code normalized", {
@@ -491,17 +511,26 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
     });
     code = n.code || code;
     // A manual value must carry its own state; never combine a pasted code
-    // with state captured from an earlier callback.
+    // with state captured from an earlier callback. xAI is the exception: its
+    // browser flow displays a standalone code that remains bound to this PKCE
+    // session through the verifier used during token exchange.
     returnedState = n.state || "";
+    acceptsActivePkceSession =
+      type === "xai" && !!n.code && !n.state && isStandaloneAuthCode(pasteCode);
+    callbackInputMissingCode = !n.code && isCallbackLikeInput(pasteCode);
   }
   if (!code) {
-    const msg = session?.error
-      ? `OAuth error: ${session.error}`
-      : "No authorization code yet. Finish login in the browser (paste the code if shown), then click I'm done.";
+    const msg = callbackInputMissingCode
+      ? type === "xai"
+        ? "That URL does not contain an authorization code. Paste the code xAI shows you, or the full callback URL after authorization."
+        : "That URL does not contain an authorization code. Paste the full callback URL after authorization."
+      : session?.error
+        ? `OAuth error: ${session.error}`
+        : "No authorization code yet. Finish login in the browser, then click Finish connection.";
     logger.error(msg);
     throw new Error(msg);
   }
-  if (!statesMatch(session.state, returnedState)) {
+  if (!statesMatch(session.state, returnedState) && !acceptsActivePkceSession) {
     logger.warn(`OAuth state validation failed for ${type}`);
     throw new Error("OAuth state mismatch. Start the connection again and paste the full callback URL.");
   }
@@ -509,7 +538,7 @@ async function completeOAuth(type, { pasteCode, fetchImpl = fetch } = {}) {
   const t = type === "codex" ? "chatgpt" : type;
   logger.oauth(`exchanging tokens type=${t}`, {
     codeLen: code.length,
-    stateValidated: true,
+    authorizationBinding: acceptsActivePkceSession ? "active-pkce-session" : "callback-state",
     redirectUri: session?.redirectUri,
   });
   let tokens;
