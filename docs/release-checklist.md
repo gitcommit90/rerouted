@@ -104,6 +104,8 @@ MOUNT="$(hdiutil attach "$DMG" -nobrowse | awk '/\/Volumes\// {sub(/^.*\/Volumes
 trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
 
 codesign --verify --deep --strict "$MOUNT/ReRouted.app"
+test -f "$MOUNT/ReRouted.app/Contents/Resources/LICENSE"
+test -f "$MOUNT/LICENSE.txt"
 xcrun stapler validate "$MOUNT/ReRouted.app"
 spctl --assess --type execute --verbose=4 "$MOUNT/ReRouted.app"
 xcrun stapler validate "$DMG"
@@ -113,6 +115,7 @@ shasum -a 256 "$DMG"
 UPDATE_DIR="$(mktemp -d)"
 ditto -x -k "$UPDATE_ZIP" "$UPDATE_DIR"
 codesign --verify --deep --strict "$UPDATE_DIR/ReRouted.app"
+test -f "$UPDATE_DIR/ReRouted.app/Contents/Resources/LICENSE"
 xcrun stapler validate "$UPDATE_DIR/ReRouted.app"
 spctl --assess --type execute --verbose=4 "$UPDATE_DIR/ReRouted.app"
 shasum -a 256 "$UPDATE_ZIP"

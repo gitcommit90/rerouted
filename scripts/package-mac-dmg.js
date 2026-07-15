@@ -175,6 +175,7 @@ async function main() {
     extraResource: [
       path.join(ROOT, "resources", "trayTemplate.png"),
       path.join(ROOT, "resources", "trayTemplate@2x.png"),
+      path.join(ROOT, "LICENSE"),
     ].filter((p) => fs.existsSync(p)),
   });
 
@@ -185,6 +186,10 @@ async function main() {
 
   // Ensure tray icons land in Resources (packager extraResource is fine; belt & suspenders)
   const resDir = path.join(appPath, "Contents", "Resources");
+  const appLicense = path.join(resDir, "LICENSE");
+  if (!fs.existsSync(appLicense)) {
+    throw new Error("Packaged app is missing the MIT license notice");
+  }
   for (const f of ["trayTemplate.png", "trayTemplate@2x.png"]) {
     const src = path.join(ROOT, "resources", f);
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(resDir, f));
@@ -250,6 +255,7 @@ async function main() {
     const stagedApp = path.join(stage, `${PRODUCT}.app`);
     run("ditto", [appPath, stagedApp]);
     run("ln", ["-s", "/Applications", path.join(stage, "Applications")]);
+    fs.copyFileSync(path.join(ROOT, "LICENSE"), path.join(stage, "LICENSE.txt"));
 
     fs.writeFileSync(
       path.join(stage, "Install.txt"),
