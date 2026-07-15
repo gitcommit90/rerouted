@@ -12,12 +12,14 @@
     <a href="#quick-start">Quick start</a> |
     <a href="./docs/architecture.md">Architecture</a> |
     <a href="./SECURITY.md">Security</a> |
-    <a href="./PRIVACY.md">Privacy</a>
+    <a href="./PRIVACY.md">Privacy</a> |
+    <a href="./LICENSE">License</a>
   </p>
   <p>
     <a href="https://github.com/gitcommit90/rerouted/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/gitcommit90/rerouted?color=ef5b2a&label=release" /></a>
     <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-1b1d18?logo=apple&logoColor=white" />
     <img alt="Local first" src="https://img.shields.io/badge/gateway-local--first-247454" />
+    <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-ef5b2a" /></a>
   </p>
 </div>
 
@@ -98,7 +100,7 @@ ReRouted is an independent project and is not affiliated with or endorsed by any
 
 ### 1. Install
 
-[Download ReRouted 0.4.4 for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/download/v0.4.4/ReRouted-0.4.4-arm64.dmg), open the DMG, and drag ReRouted to Applications.
+[Download the latest ReRouted release for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/latest), open the DMG, and drag ReRouted to Applications.
 
 ReRouted requires Apple Silicon and macOS 12 Monterey or newer.
 
@@ -180,7 +182,7 @@ See [Privacy](./PRIVACY.md) for the local files ReRouted keeps, the network serv
 - For a suspected vulnerability, follow [the security policy](./SECURITY.md) and do not post credentials or sensitive details in a public issue.
 - Before sharing diagnostics, remove API keys, gateway keys, OAuth callback URLs or codes, account identifiers, email addresses, and any provider response that may contain private data.
 
-ReRouted's source is public for review and local builds, but no software license has been selected yet. The repository is therefore source-visible, not offered as open source. External code contributions are not currently accepted while licensing is finalized; focused issues and sanitized reproduction reports are welcome. See [Contributing](./CONTRIBUTING.md) for the current policy.
+ReRouted is open source under the [MIT License](./LICENSE). External code contributions are not currently accepted while the contribution process is finalized; focused issues and sanitized reproduction reports are welcome. See [Contributing](./CONTRIBUTING.md) for the current policy.
 
 ## Build from source
 
@@ -204,7 +206,11 @@ The implementation is intentionally small: Electron, Node's built-in HTTP server
 
 ## Current release
 
-ReRouted `0.4.4` removes the preselected High effort suffix from the ChatGPT OAuth Sol model. Sol now appears as `gpt-5.6-sol`, matching Terra and Luna, while reasoning effort remains controlled by each calling client. Existing accounts, routes, and temporary model locks migrate automatically from the old ID. Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
+ReRouted `0.4.7` accepts the standalone authorization code shown by xAI while preserving callback-state validation and PKCE binding. The xAI connection panel now presents the code field directly instead of hiding it under troubleshooting. Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
+
+## License
+
+ReRouted is licensed under the [MIT License](./LICENSE).
 
 ReRouted is an independent personal project.
 

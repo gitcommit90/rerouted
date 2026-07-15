@@ -4,7 +4,7 @@ Thank you for helping improve ReRouted.
 
 ## Current contribution status
 
-ReRouted is source-visible while its licensing approach is finalized. No software license has been selected, and external code contributions are not currently accepted.
+ReRouted is open source under the [MIT License](./LICENSE). External code contributions are not currently accepted while the maintainer finalizes a contribution review process.
 
 Please do not open a pull request with code or documentation changes yet. It may be closed without review. Focused issues, feature requests, compatibility reports, and sanitized reproduction cases are welcome.
 
@@ -48,4 +48,4 @@ Maintainers handle package version changes, signing, notarization, release publi
 
 Do not use a public issue for a vulnerability or credential exposure. Follow [Security](./SECURITY.md) instead.
 
-This policy will be updated when a project license and an external pull-request process are in place.
+This policy will be updated when an external pull-request process is in place.
