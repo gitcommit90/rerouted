@@ -1,6 +1,6 @@
 ## External contributions are not yet accepted
 
-ReRouted is source-visible while its licensing approach is finalized. Please read [CONTRIBUTING.md](../CONTRIBUTING.md) before opening a pull request. External code and documentation contributions may be closed without review until a license and contribution process are published.
+ReRouted is licensed under the MIT License, but its external contribution process is still being finalized. Please read [CONTRIBUTING.md](../CONTRIBUTING.md) before opening a pull request. External code and documentation contributions may be closed without review until that process is published.
 
 Never include real API keys, gateway keys, OAuth tokens or codes, callback URLs, cookies, account identifiers, email addresses, private prompts, provider responses, or unreviewed logs.
 
