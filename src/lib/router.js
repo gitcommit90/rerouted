@@ -779,6 +779,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
               ) {
                 return await chatgpt.pipeResponsesSse(res.body, clientRes, upstreamModel, {
                   collect: false,
+                  reasoningScope: meta.reasoningScope,
                 });
               } else if (meta.translate === "gemini" || provider.type === "antigravity") {
                 return await antigravity.pipeGeminiSse(res.body, clientRes, upstreamModel);
@@ -812,6 +813,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
       if (meta.translate === "responses" || provider.type === "chatgpt" || provider.type === "codex") {
         const collected = await chatgpt.pipeResponsesSse(res.body, null, upstreamModel, {
           collect: true,
+          reasoningScope: meta.reasoningScope,
         });
         return {
           ok: true,
