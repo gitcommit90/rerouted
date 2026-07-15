@@ -1,18 +1,20 @@
 "use strict";
 
 const openaiCompat = require("./openai-compat");
+const cloudflare = require("./cloudflare");
 const claude = require("./claude");
 const chatgpt = require("./chatgpt");
 const antigravity = require("./antigravity");
 const xai = require("./xai");
 const { OAUTH } = require("../constants");
 const { canonicalProviderType, isOAuthProvider } = require("../store");
+const { isCustomProviderType, customProviderModelId } = require("../model-ids");
 
 const TYPE_ADAPTER = {
   "openai-compat": openaiCompat,
   openrouter: openaiCompat,
   nvidia: openaiCompat,
-  cloudflare: openaiCompat,
+  cloudflare,
   glm: openaiCompat,
   custom: openaiCompat,
   claude,
@@ -26,19 +28,17 @@ function getAdapter(type) {
   return TYPE_ADAPTER[type] || null;
 }
 
-/**
- * Resolve models exposed for a provider account (prefix with provider id for uniqueness
- * when multiple accounts exist — unless single-account simple id is enough).
- * Model ids in the gateway are: for combos = combo id; for providers =
- *   `<type>/<model>` or if label set `<type>:<label>/<model>`.
- */
+/** Build the public gateway model id while retaining provider-specific disambiguation. */
 function modelIdFor(provider, model) {
   const mid = typeof model === "string" ? model : model.id;
   const base = canonicalProviderType(provider.type);
   if (isOAuthProvider(provider) && provider.accountAlias) {
     return `${base}/${provider.accountAlias}/${mid}`;
   }
-  // Keyed/custom providers retain their stable provider-id disambiguator.
+  if (isCustomProviderType(provider.type)) {
+    return customProviderModelId(provider, mid);
+  }
+  // Named keyed presets retain their stable provider-id disambiguator.
   const acc = (provider.id || "").replace(/^prov_/, "").slice(0, 8);
   if (acc) return `${base}/${acc}/${mid}`;
   return `${base}/${mid}`;

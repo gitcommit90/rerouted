@@ -7,7 +7,13 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 
-const { createRouter, parseResetHint, resolveSingle } = require("../src/lib/router");
+const {
+  classifyFailure,
+  createRouter,
+  errorMessageFromText,
+  parseResetHint,
+  resolveSingle,
+} = require("../src/lib/router");
 const { createStore } = require("../src/lib/store");
 const { createGateway } = require("../src/lib/gateway");
 
@@ -89,6 +95,39 @@ async function withGateway(store, router, callback) {
     await new Promise((resolve) => server.close(resolve));
   }
 }
+
+describe("provider failure classification", () => {
+  it("extracts top-level detail messages", () => {
+    assert.equal(
+      errorMessageFromText(
+        JSON.stringify({
+          detail: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+        })
+      ),
+      "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."
+    );
+  });
+
+  it("allows model capability failures to advance fallback without widening generic errors", () => {
+    assert.deepEqual(
+      classifyFailure(
+        400,
+        "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."
+      ),
+      { eligible: true, kind: "capability", defaultCooldownMs: 0 }
+    );
+    assert.deepEqual(classifyFailure(400, "invalid request body"), {
+      eligible: false,
+      kind: "request",
+      defaultCooldownMs: 0,
+    });
+    assert.deepEqual(classifyFailure(404, "not-found"), {
+      eligible: false,
+      kind: "request",
+      defaultCooldownMs: 0,
+    });
+  });
+});
 
 describe("same-provider OAuth account fallback", () => {
   it("assigns monotonic oauth aliases and advertises only shared model ids", () => {
@@ -410,6 +449,117 @@ describe("same-provider OAuth account fallback", () => {
     assert.equal(result.ok, true, JSON.stringify(result.error));
     assert.equal(result.accountAlias, "oauth2");
     assert.deepEqual(calls, ["token-a", "token-b"]);
+  });
+
+  it("advances a three-target route after a locked account and unsupported model", async () => {
+    const unsupported =
+      "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.";
+    const store = createStore(tmpConfig());
+    store.seed({
+      providers: [
+        chatgptAccount("prov_a", "token-a", 100, {
+          models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", enabled: true }],
+          modelLocks: {
+            "*": {
+              until: Date.now() + 5 * 60_000,
+              status: 429,
+              kind: "quota",
+              reason: "usage_limit_reached",
+            },
+          },
+        }),
+        chatgptAccount("prov_b", "token-b", 200, {
+          models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", enabled: true }],
+        }),
+        {
+          id: "prov_backup",
+          type: "openai-compat",
+          name: "Backup",
+          baseUrl: "https://backup.test/v1",
+          apiKey: "backup-key",
+          enabled: true,
+          models: [{ id: "backup-model", name: "Backup model", enabled: true }],
+        },
+      ],
+      combos: [
+        {
+          id: "combo_sol",
+          name: "5.6-sol",
+          strategy: "fallback",
+          members: [
+            { providerId: "prov_a", model: "gpt-5.6-sol" },
+            { providerId: "prov_b", model: "gpt-5.6-sol" },
+            { providerId: "prov_backup", model: "backup-model" },
+          ],
+        },
+      ],
+    });
+    const calls = [];
+    const logger = captureLogger();
+    const router = createRouter({
+      store,
+      logger,
+      fetchImpl: async (_url, options) => {
+        const token = authToken(options);
+        calls.push(token);
+        if (token === "token-b") {
+          return new Response(JSON.stringify({ detail: unsupported }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (token === "backup-key") {
+          const request = JSON.parse(options.body);
+          if (request.stream) {
+            return new Response(
+              [
+                `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "third target worked" }, finish_reason: null }] })}`,
+                `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
+                "data: [DONE]",
+                "",
+              ].join("\n\n"),
+              { status: 200, headers: { "Content-Type": "text/event-stream" } }
+            );
+          }
+          return successResponse("third target worked");
+        }
+        throw new Error(`Unexpected upstream token: ${token}`);
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "5.6-sol",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+      },
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(result.openAiJson.choices[0].message.content, "third target worked");
+    assert.deepEqual(calls, ["token-b", "backup-key"]);
+    assert.deepEqual(store.load().providers.find((provider) => provider.id === "prov_b").modelLocks, {});
+    assert.ok(logger.entries.some((entry) => entry.meta?.event === "account_locked_skip"));
+    assert.ok(logger.entries.some((entry) => entry.meta?.event === "route_fallback"));
+
+    calls.length = 0;
+    await withGateway(store, router, async (port) => {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${store.load().apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "5.6-sol",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true,
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.match(await response.text(), /third target worked/);
+    });
+    assert.deepEqual(calls, ["token-b", "backup-key"]);
   });
 
   it("does not fall back or lock accounts after caller cancellation", async () => {

@@ -70,11 +70,19 @@ describe("public combo identity", () => {
         accountAlias: "oauth1",
         models: [{ id: "gpt-5", enabled: true }],
       },
+      {
+        id: "prov_abcdef1234",
+        type: "openai-compat",
+        name: "  Local Lab  ",
+        models: [{ id: "private-model", enabled: true }],
+      },
     ]);
     assert.equal(providerIds.has("gpt-5"), true);
     assert.equal(providerIds.has("chatgpt/gpt-5"), true);
     assert.equal(providerIds.has("chatgpt/oauth1/gpt-5"), true);
     assert.equal(providerIds.has("chatgpt/12345678/gpt-5"), true);
+    assert.equal(providerIds.has("local lab/custom/private-model"), true);
+    assert.equal(providerIds.has("openai-compat/abcdef12/private-model"), true);
     assert.equal(comboStorageIdConflict([{ id: "combo_a", name: "Coding" }], "combo_a")?.id, "combo_a");
   });
 

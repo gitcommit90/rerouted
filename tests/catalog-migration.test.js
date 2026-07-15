@@ -2,8 +2,12 @@
 
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { OAUTH } = require("../src/lib/constants");
-const { migrate } = require("../src/lib/store");
+const { createRouter } = require("../src/lib/router");
+const { createStore, migrate } = require("../src/lib/store");
 
 function migrateProvider(provider) {
   return migrate({ providers: [provider], combos: [] }).providers[0];
@@ -57,6 +61,79 @@ describe("OAuth catalog migration", () => {
     }
   });
 
+  it("allows a retired catalog ID to be explicitly re-added after cleanup", () => {
+    const cfg = migrate({
+      version: 7,
+      providers: [
+        {
+          id: "prov_claude",
+          type: "claude",
+          models: ["claude-sonnet-4-6"],
+        },
+      ],
+      combos: [],
+    });
+
+    assert.equal(cfg.version, 8);
+    assert.equal(
+      cfg.providers[0].models.some((model) => model.id === "claude-sonnet-4-6"),
+      false
+    );
+
+    cfg.providers[0].models.push({
+      id: "claude-sonnet-4-6",
+      name: "claude-sonnet-4-6",
+      enabled: true,
+    });
+    const saved = migrate(cfg);
+
+    assert.deepEqual(
+      saved.providers[0].models.find((model) => model.id === "claude-sonnet-4-6"),
+      {
+        id: "claude-sonnet-4-6",
+        name: "claude-sonnet-4-6",
+        enabled: true,
+      }
+    );
+  });
+
+  it("persists an explicitly re-added Claude model across disk reload and discovery", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rerouted-claude-model-"));
+    const configPath = path.join(dir, "config.json");
+    try {
+      const store = createStore(configPath);
+      store.seed({
+        version: 7,
+        providers: [{ id: "prov_claude", type: "claude", enabled: true, models: [] }],
+        combos: [],
+      });
+      store.update((cfg) => {
+        cfg.providers[0].models.push({
+          id: "claude-sonnet-4-6",
+          name: "claude-sonnet-4-6",
+          enabled: true,
+        });
+      });
+
+      const reloaded = createStore(configPath);
+      const saved = reloaded
+        .load()
+        .providers[0].models.find((model) => model.id === "claude-sonnet-4-6");
+      assert.deepEqual(saved, {
+        id: "claude-sonnet-4-6",
+        name: "claude-sonnet-4-6",
+        enabled: true,
+      });
+      assert.ok(
+        createRouter({ store: reloaded })
+          .listModels()
+          .data.some((model) => model.id === "claude/claude-sonnet-4-6")
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not apply OAuth cleanup to keyed providers", () => {
     const provider = migrateProvider({
       id: "prov_custom",
@@ -68,6 +145,24 @@ describe("OAuth catalog migration", () => {
       provider.models.map((model) => model.id),
       ["gpt-5.3-codex", "grok-3"]
     );
+  });
+
+  it("normalizes legacy custom names without stealing an existing route id", () => {
+    const cfg = migrate({
+      version: 7,
+      providers: [
+        { id: "prov_a", type: "openai-compat", name: "", models: ["model-a"] },
+        { id: "prov_b", type: "openai-compat", name: "Custom", models: ["model-a"] },
+        { id: "prov_c", type: "openai-compat", name: "Lab", models: ["model-a"] },
+      ],
+      combos: [{ id: "combo_lab", name: "Lab/custom/model-a", members: [] }],
+    });
+
+    assert.deepEqual(
+      cfg.providers.map((provider) => provider.name),
+      ["Custom", "Custom 2", "Lab 2"]
+    );
+    assert.equal(cfg.combos[0].name, "Lab/custom/model-a");
   });
 
   it("clears pre-fix xAI locks once without clearing other providers or future xAI locks", () => {
@@ -86,7 +181,7 @@ describe("OAuth catalog migration", () => {
       combos: [],
     });
 
-    assert.equal(migrated.version, 7);
+    assert.equal(migrated.version, 8);
     assert.deepEqual(migrated.providers[0].modelLocks, {});
     assert.deepEqual(migrated.providers[1].modelLocks, { "*": oldLock });
 

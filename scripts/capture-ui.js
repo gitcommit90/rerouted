@@ -12,7 +12,7 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const { createStore } = require("../src/lib/store");
 const { generateApiKey } = require("../src/lib/password");
 const { KEYED_PRESETS, ONBOARDING_STEPS, DEFAULT_PORT, OAUTH } = require("../src/lib/constants");
-const { defaultModelsForType } = require("../src/lib/providers");
+const { defaultModelsForType, listProviderModels } = require("../src/lib/providers");
 const { publicCombo } = require("../src/lib/combos");
 const packageInfo = require("../package.json");
 
@@ -204,18 +204,26 @@ function seedOnboarded() {
 function registerIpc() {
   ipcMain.handle("app:get-state", async () => {
     const cfg = store.load();
-    const publicProviders = (cfg.providers || []).map((p) => ({
-      id: p.id,
-      type: p.type,
-      name: p.name,
-      accountAlias: p.accountAlias || null,
-      email: p.email,
-      profileName: p.profileName,
-      enabled: p.enabled !== false,
-      hasToken: !!(p.accessToken || p.apiKey),
-      models: p.models || defaultModelsForType(p.type),
-      baseUrl: p.baseUrl,
-    }));
+    const publicProviders = (cfg.providers || []).map((p) => {
+      const models = listProviderModels(p, { includeDisabled: true }).map((model) => ({
+        id: model.upstreamModel,
+        gatewayId: model.id,
+        name: model.name,
+        enabled: model.enabled !== false,
+      }));
+      return {
+        id: p.id,
+        type: p.type,
+        name: p.name,
+        accountAlias: p.accountAlias || null,
+        email: p.email,
+        profileName: p.profileName,
+        enabled: p.enabled !== false,
+        hasToken: !!(p.accessToken || p.apiKey),
+        models: models.length ? models : defaultModelsForType(p.type),
+        baseUrl: p.baseUrl,
+      };
+    });
     return {
       onboardingComplete: !!cfg.onboardingComplete,
       appVersion: packageInfo.version,
@@ -642,6 +650,53 @@ app.whenReady().then(async () => {
         })()
       `);
     }
+  }
+
+  if (process.env.CAPTURE_ROUTE_PICKER_ONLY === "1") {
+    await win.webContents.executeJavaScript(`
+      (async () => {
+        window.__rr_goto_page("combos");
+        document.querySelector("button[data-edit]")?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        let account = document.getElementById("c-add-account");
+        let model = document.getElementById("c-add-model");
+        let add = document.getElementById("btn-add-member");
+        if (!account || !model?.disabled || !add?.disabled) {
+          throw new Error("Route picker did not start with Model and Add disabled");
+        }
+        account.value = "prov_chatgpt_demo";
+        account.dispatchEvent(new Event("change", { bubbles: true }));
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        account = document.getElementById("c-add-account");
+        model = document.getElementById("c-add-model");
+        add = document.getElementById("btn-add-member");
+        const modelOptions = [...model.options].filter((option) => option.value);
+        if (account.value !== "prov_chatgpt_demo" || model.disabled || !modelOptions.length) {
+          throw new Error("Selecting an account did not enable and populate its models");
+        }
+        model.value = modelOptions[1]?.value || modelOptions[0].value;
+        model.dispatchEvent(new Event("change", { bubbles: true }));
+        if (add.disabled) throw new Error("Selecting a model did not enable Add to route");
+        return true;
+      })()
+    `);
+    await capture("app-combos-editor.png", ".route-editor", ".route-editor");
+    await win.webContents.executeJavaScript(`
+      (() => {
+        const before = document.querySelectorAll(".member-row").length;
+        document.getElementById("btn-add-member")?.click();
+        const after = document.querySelectorAll(".member-row").length;
+        const account = document.getElementById("c-add-account");
+        const model = document.getElementById("c-add-model");
+        if (after !== before + 1 || account.value || !model.disabled) {
+          throw new Error("Adding a route member did not reset the dependent picker");
+        }
+        return true;
+      })()
+    `);
+    console.log("done", outDir);
+    app.exit(0);
+    return;
   }
 
   await win.webContents.executeJavaScript(`

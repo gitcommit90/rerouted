@@ -6,6 +6,7 @@ const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
 const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
 const { buildProviderCatalog } = window.ReroutedProviderCatalog;
+const { buildRouteAccountOptions, modelsForRouteAccount } = window.ReroutedRoutePicker;
 const { oauthPrompt } = window.ReroutedOAuthPrompt;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
@@ -606,6 +607,7 @@ function bindKeyedProviderPicker(
         let result;
         try {
           result = await api.invoke("app:test-keyed-provider", {
+            providerType: isCustom ? "openai-compat" : presetId,
             baseUrl: baseUrl(),
             apiKey: field("key").value.trim(),
             modelId: field("model")?.value?.trim() || "",
@@ -652,7 +654,7 @@ function bindKeyedProviderPicker(
             baseUrl: baseUrl(),
             apiKey: field("key").value.trim(),
             accountId: accountId(),
-            models: models.slice(0, 50).map((model) =>
+            models: models.map((model) =>
               typeof model === "string"
                 ? { id: model, name: model, enabled: true }
                 : { ...model, enabled: true }
@@ -1512,6 +1514,8 @@ function beginComboEdit(combo) {
     id: combo?.storageId || combo?.id || null,
     name: combo?.name || "",
     strategy: combo?.strategy || "fallback",
+    pickerAccountId: null,
+    pickerModelId: null,
     members: (combo?.members || []).map((member) => ({
       providerId: member.providerId,
       model: member.model || member.upstreamModel,
@@ -1532,11 +1536,31 @@ function comboMemberInfo(member, models) {
   );
 }
 
+function routeAccountLabel(account) {
+  if (account.accountAlias) return `${account.name} · ${aliasLabel(account.accountAlias)}`;
+  if (account.connectionCount > 1) return `${account.name} · Connection ${account.connectionIndex}`;
+  return account.name;
+}
+
 function renderCombos() {
   if (blockSensitiveRenderIfLocked()) return;
   const combos = state.combos || [];
   const models = flatModels();
+  const accounts = buildRouteAccountOptions(state.providers || []);
   const editor = comboDraft;
+  if (editor && !accounts.some((account) => account.id === editor.pickerAccountId)) {
+    editor.pickerAccountId = null;
+    editor.pickerModelId = null;
+  }
+  const pickerModels = editor
+    ? modelsForRouteAccount(accounts, editor.pickerAccountId)
+    : [];
+  if (
+    editor?.pickerModelId &&
+    !pickerModels.some((model) => model.upstreamModel === editor.pickerModelId)
+  ) {
+    editor.pickerModelId = null;
+  }
 
   view.innerHTML = `
     ${pageHeader("Routing", "Routes", "Give clients one memorable model ID while ReRouted handles account and provider failover.", '<button type="button" class="btn btn-primary btn-sm" id="btn-new-route">New route</button>')}
@@ -1591,7 +1615,11 @@ function renderCombos() {
             : `<div class="empty" style="margin:0;border:0">Add at least one model to this route.</div>`
         }
       </div>
-      <div class="copy-field"><select class="select" id="c-add-model"><option value="">Choose an account and model…</option>${models.map((model, index) => `<option value="${index}">${esc(model.name)} · ${esc(model.upstreamModel)}</option>`).join("")}</select><button type="button" class="btn btn-secondary btn-sm" id="btn-add-member">Add</button></div>
+      <div class="route-member-picker">
+        <label class="route-picker-field" for="c-add-account"><span class="label">Account</span><select class="select" id="c-add-account"><option value="">Choose an account…</option>${accounts.map((account) => `<option value="${esc(account.id)}" ${account.id === editor.pickerAccountId ? "selected" : ""}>${esc(routeAccountLabel(account))}</option>`).join("")}</select></label>
+        <label class="route-picker-field" for="c-add-model"><span class="label">Model</span><select class="select" id="c-add-model" ${editor.pickerAccountId ? "" : "disabled"}><option value="">${editor.pickerAccountId ? "Choose a model…" : "Choose an account first…"}</option>${pickerModels.map((model) => `<option value="${esc(model.upstreamModel)}" ${model.upstreamModel === editor.pickerModelId ? "selected" : ""}>${esc(model.name)} · ${esc(model.upstreamModel)}</option>`).join("")}</select></label>
+        <button type="button" class="btn btn-secondary btn-sm route-picker-add" id="btn-add-member" ${editor.pickerAccountId && editor.pickerModelId ? "" : "disabled"}>Add to route</button>
+      </div>
       <div class="btn-row"><button type="button" class="btn btn-secondary" id="btn-cancel-edit">Cancel</button><button type="button" class="btn btn-primary" id="btn-create">${editor.id ? "Save route" : "Create route"}</button></div>
     </section>`
         : ""
@@ -1649,18 +1677,31 @@ function renderCombos() {
       renderCombos();
     };
   });
+  $("#c-add-account").onchange = () => {
+    syncComboDraft();
+    editor.pickerAccountId = $("#c-add-account").value || null;
+    editor.pickerModelId = null;
+    renderCombos();
+  };
+  $("#c-add-model").onchange = () => {
+    editor.pickerModelId = $("#c-add-model").value || null;
+    $("#btn-add-member").disabled = !editor.pickerAccountId || !editor.pickerModelId;
+  };
   $("#btn-add-member").onclick = () => {
     syncComboDraft();
-    const value = $("#c-add-model").value;
-    if (value === "") return toast("Choose a model");
-    const index = Number(value);
-    const model = models[index];
+    if (!editor.pickerAccountId) return toast("Choose an account");
+    if (!editor.pickerModelId) return toast("Choose a model");
+    const model = pickerModels.find(
+      (item) => item.upstreamModel === editor.pickerModelId
+    );
     if (!model) return toast("Choose a model");
     const member = { providerId: model.providerId, model: model.upstreamModel };
     if (editor.members.some((item) => memberKey(item) === memberKey(member))) {
       return toast("That model is already in the route");
     }
     editor.members.push(member);
+    editor.pickerAccountId = null;
+    editor.pickerModelId = null;
     renderCombos();
   };
   $("#btn-cancel-edit").onclick = () => {

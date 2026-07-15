@@ -83,3 +83,50 @@ it("does not admit an exact model when its chat-completion test fails", async ()
   assert.equal(result.ok, false);
   assert.match(result.error, /Model test failed \(404\): unknown model/);
 });
+
+it("supports Cloudflare model discovery when the preset adapter is selected", async () => {
+  const pages = [];
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    assert.equal(url.pathname, "/client/v4/accounts/account-id/ai/models/search");
+    assert.equal(url.searchParams.get("per_page"), "100");
+    pages.push(Number(url.searchParams.get("page")));
+    assert.equal(request.headers.authorization, "Bearer test-key");
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        success: true,
+        result:
+          url.searchParams.get("page") === "1"
+            ? [
+                {
+                  id: "catalog-uuid",
+                  name: "@cf/meta/llama-chat",
+                  task: { name: "Text Generation" },
+                },
+              ]
+            : [],
+      })
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const result = await testKeyedProvider(
+      {
+        baseUrl: `http://127.0.0.1:${server.address().port}/client/v4/accounts/account-id/ai/v1`,
+        apiKey: "test-key",
+        providerType: "cloudflare",
+      }
+    );
+
+    assert.deepEqual(result, {
+      ok: true,
+      validation: "models",
+      models: [{ id: "@cf/meta/llama-chat", name: "@cf/meta/llama-chat" }],
+    });
+    assert.deepEqual(pages, [1, 2]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
