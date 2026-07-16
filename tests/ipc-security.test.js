@@ -54,6 +54,7 @@ describe("main-process IPC lock enforcement", () => {
       apiKeys: [{ key: "rr-secret" }],
       providers: [{ email: "person@example.com" }],
       combos: [{ name: "coding" }],
+      activeRequests: [{ id: "request-secret", model: "private-route" }],
       steps: ["done"],
     });
 
@@ -61,6 +62,7 @@ describe("main-process IPC lock enforcement", () => {
     assert.equal(redacted.apiKeys, undefined);
     assert.equal(redacted.providers, undefined);
     assert.equal(redacted.combos, undefined);
+    assert.equal(redacted.activeRequests, undefined);
     assert.equal(redacted.serverListening, true);
   });
 

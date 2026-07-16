@@ -54,6 +54,7 @@ const EVENT_CHANNELS = new Set([
   "app:update-state",
   "app:session-lock-changed",
   "app:provider-identities-updated",
+  "app:request-activity",
   "app:open-settings",
 ]);
 

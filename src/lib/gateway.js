@@ -17,6 +17,7 @@ function createGateway({
   port = DEFAULT_PORT,
   host = "127.0.0.1",
   maxBodyBytes = MAX_JSON_BODY_BYTES,
+  requestActivity,
 } = {}) {
   let server = null;
   let listeningPort = null;
@@ -202,6 +203,12 @@ function createGateway({
           model: body.model,
           stream: !!body.stream,
         });
+        const activityId = requestActivity?.begin({
+          model: body.model,
+          stream: !!body.stream,
+        });
+        let activityStatus = 500;
+        let activityOutcome = "error";
         const clientAbort = new AbortController();
         const onClientAbort = () => {
           if (!clientAbort.signal.aborted) clientAbort.abort(new Error("Client disconnected"));
@@ -209,8 +216,14 @@ function createGateway({
         req.once("aborted", onClientAbort);
         res.once("close", onClientAbort);
         try {
-          const result = await router.chatCompletions({ body, signal: clientAbort.signal });
+          const result = await router.chatCompletions({
+            body,
+            signal: clientAbort.signal,
+            onProviderSelected: (provider) => requestActivity?.route(activityId, provider),
+          });
           if (!result.ok) {
+            activityStatus = result.status || 502;
+            activityOutcome = result.status === 499 ? "canceled" : "error";
             logger.error("chat/completions failed", {
               model: body.model,
               status: result.status,
@@ -235,7 +248,11 @@ function createGateway({
             });
             try {
               await result.streamPipe(res);
+              activityStatus = 200;
+              activityOutcome = "success";
             } catch (e) {
+              activityStatus = clientAbort.signal.aborted ? 499 : 502;
+              activityOutcome = clientAbort.signal.aborted ? "canceled" : "error";
               if (!res.writableEnded) {
                 res.write(
                   `data: ${JSON.stringify({ error: { message: e.message } })}\n\n`
@@ -248,10 +265,16 @@ function createGateway({
 
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(result.openAiJson));
+          activityStatus = 200;
+          activityOutcome = "success";
           return;
         } finally {
           req.removeListener("aborted", onClientAbort);
           res.removeListener("close", onClientAbort);
+          requestActivity?.end(activityId, {
+            status: activityStatus,
+            outcome: activityOutcome,
+          });
         }
       }
 
