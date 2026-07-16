@@ -483,19 +483,15 @@ async function pipeResponsesSse(
       }
 
       let delta = "";
-      if (type === "response.output_text.delta" && typeof data.delta === "string") delta = data.delta;
-      else if (type === "response.output_text.delta" && data.delta?.text) delta = data.delta.text;
-      else if (type === "response.output_text.delta" && typeof data.text === "string")
-        delta = data.text;
-      else if (data.delta?.content) {
-        for (const c of data.delta.content) {
-          if (c.type === "output_text" || c.type === "text") delta += c.text || "";
+      if (type === "response.output_text.delta") {
+        if (typeof data.delta === "string") delta = data.delta;
+        else if (data.delta?.text) delta = data.delta.text;
+        else if (typeof data.text === "string") delta = data.text;
+        else if (Array.isArray(data.delta?.content)) {
+          for (const c of data.delta.content) {
+            if (c.type === "output_text" || c.type === "text") delta += c.text || "";
+          }
         }
-      } else if (
-        type !== "response.function_call_arguments.delta" &&
-        typeof data.delta === "string"
-      ) {
-        delta = data.delta;
       }
 
       if (delta) {
