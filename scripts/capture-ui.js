@@ -105,6 +105,31 @@ function demoUsage(period = "24h") {
   };
 }
 
+function demoActiveRequests() {
+  return [
+    {
+      id: "request-demo-chatgpt",
+      model: "coding",
+      stream: true,
+      startedAt: demoStartedAt - 4_200,
+      providerId: "prov_chatgpt_demo",
+      providerType: "chatgpt",
+      providerName: "ChatGPT Plus",
+      upstreamModel: "gpt-5",
+    },
+    {
+      id: "request-demo-claude",
+      model: "claude/claude-sonnet-4-5",
+      stream: true,
+      startedAt: demoStartedAt - 1_800,
+      providerId: "prov_claude_demo",
+      providerType: "claude",
+      providerName: "Claude Pro",
+      upstreamModel: "claude-sonnet-4-5",
+    },
+  ];
+}
+
 let demoLogEntries = [
   { at: Date.now() - 35_000, level: "info", msg: "Gateway request completed", meta: { route: "coding", status: 200 } },
   { at: Date.now() - 7 * 60_000, level: "info", msg: "OAuth token refreshed", meta: { provider: "ChatGPT Plus" } },
@@ -242,6 +267,7 @@ function registerIpc() {
       combos: (cfg.combos || []).map(publicCombo),
       stats: demoStats(),
       usage: demoUsage(),
+      activeRequests: demoActiveRequests(),
       unlocked: true,
       hasAdminPassword: false,
       oauthProviders: Object.keys(OAUTH).map((k) => ({ id: k, name: OAUTH[k].name })),
@@ -709,18 +735,22 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript(`
     (() => {
       const details = document.querySelector("[data-home-credentials]");
-      const routeMap = document.querySelector("[data-home-route-map]");
-      const track = routeMap?.querySelector(".route-track");
+      const routeStage = document.querySelector("[data-live-router-stage]");
+      const path = routeStage?.querySelector(".live-request-path");
       const copyButton = document.getElementById("copy-url");
-      if (!details || !routeMap || !track || !copyButton) {
+      if (
+        !details ||
+        !routeStage ||
+        !path ||
+        routeStage.querySelectorAll(".live-request-path").length !== 2 ||
+        routeStage.querySelectorAll(".live-provider").length !== 5 ||
+        !copyButton
+      ) {
         throw new Error("Status persistence controls did not render");
       }
       details.open = true;
       copyButton.focus();
-      window.__rr_home_poll_test = { routeMap, track, copyButton, animationStarts: 0 };
-      routeMap.addEventListener("animationstart", () => {
-        window.__rr_home_poll_test.animationStarts += 1;
-      });
+      window.__rr_home_poll_test = { routeStage, path, copyButton };
       return true;
     })()
   `);
@@ -729,15 +759,12 @@ app.whenReady().then(async () => {
     (() => {
       const test = window.__rr_home_poll_test;
       const details = document.querySelector("[data-home-credentials]");
-      if (document.querySelector("[data-home-route-map] .route-track") !== test.track) {
-        throw new Error("Status polling replaced the route animation DOM");
+      if (document.querySelector("[data-live-router-stage] .live-request-path") !== test.path) {
+        throw new Error("Status polling replaced an unchanged live request path");
       }
       if (!details?.open) throw new Error("Status polling collapsed Credentials and network");
       if (document.activeElement !== test.copyButton) {
         throw new Error("Status polling moved focus away from the endpoint controls");
-      }
-      if (test.animationStarts !== 0) {
-        throw new Error("Status polling restarted the route animation without new traffic");
       }
       return true;
     })()

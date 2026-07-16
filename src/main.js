@@ -19,6 +19,7 @@ const {
 const { createStore } = require("./lib/store");
 const { createRouter } = require("./lib/router");
 const { createGateway } = require("./lib/gateway");
+const { createRequestActivity } = require("./lib/request-activity");
 const { createUsageStore, hydrateUsageIdentity } = require("./lib/usage");
 const logger = require("./lib/logger");
 const { hashPassword, verifyPassword, generateId, generateApiKey } = require("./lib/password");
@@ -75,8 +76,9 @@ logger.info("ReRouted starting", { userData, logPath });
 
 const store = createStore(configPath);
 const usage = createUsageStore(usagePath, { legacyPath: legacyUsagePath });
+const requestActivity = createRequestActivity();
 const router = createRouter({ store, usage });
-const gateway = createGateway({ store, router });
+const gateway = createGateway({ store, router, requestActivity });
 const sessionAuth = createSessionAuth();
 const quota = createQuotaService({ store, refreshProvider: refreshProviderForQuota });
 
@@ -86,6 +88,15 @@ let lastBlurHide = 0;
 let detectedCache = [];
 let updateService = null;
 let updatePromptShown = false;
+
+requestActivity.subscribe((activity) => {
+  const cfg = store.load();
+  const canPublish =
+    !hasAdminPassword(cfg) || sessionAuth.isUnlocked(true) || harnessModeEnabled();
+  if (canPublish && panel && !panel.isDestroyed()) {
+    panel.webContents.send("app:request-activity", activity);
+  }
+});
 
 function publishUpdateState(update) {
   if (panel && !panel.isDestroyed()) {
@@ -387,6 +398,7 @@ function registerIpc() {
       combos: (cfg.combos || []).map(publicCombo),
       stats: publicStats(router.stats(), cfg),
       usage: publicUsage(router.usageAggregate("24h"), cfg),
+      activeRequests: requestActivity.snapshot(),
       unlocked,
       hasAdminPassword: hasPassword,
       oauthProviders: Object.keys(OAUTH).map((k) => ({

@@ -254,6 +254,49 @@ describe("same-provider OAuth account fallback", () => {
     assert.ok(logger.entries.some((entry) => entry.meta?.event === "account_fallback"));
   });
 
+  it("reports each provider selection as fallback retargets a live request", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({
+      providers: [oauthAccount("prov_a", "token-a", 100), oauthAccount("prov_b", "token-b", 200)],
+    });
+    const selections = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (_url, options) => {
+        if (authToken(options) === "token-a") {
+          return new Response(JSON.stringify({ error: { message: "quota exhausted" } }), {
+            status: 429,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return successResponse("fallback target");
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "xai/grok-4.5",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+      },
+      onProviderSelected: (provider) => selections.push(provider),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.deepEqual(
+      selections.map(({ providerId, providerType, upstreamModel }) => ({
+        providerId,
+        providerType,
+        upstreamModel,
+      })),
+      [
+        { providerId: "prov_a", providerType: "xai", upstreamModel: "grok-4.5" },
+        { providerId: "prov_b", providerType: "xai", upstreamModel: "grok-4.5" },
+      ]
+    );
+  });
+
   it("serves a successful gateway response after shared-route account fallback", async () => {
     const store = createStore(tmpConfig());
     store.seed({

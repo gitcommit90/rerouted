@@ -880,7 +880,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
     }
   }
 
-  async function chatCompletions({ body, signal } = {}) {
+  async function chatCompletions({ body, signal, onProviderSelected } = {}) {
     const cfg = getConfig();
     const modelId = body.model;
     const stream = !!body.stream;
@@ -977,6 +977,19 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
         }
 
         const attemptMember = { ...member, provider };
+        if (typeof onProviderSelected === "function") {
+          try {
+            onProviderSelected({
+              providerId: provider.id,
+              providerType: canonicalProviderType(provider.type),
+              providerName: provider.name,
+              accountAlias: provider.accountAlias || null,
+              upstreamModel: member.upstreamModel,
+            });
+          } catch {
+            // UI telemetry must remain isolated from routing.
+          }
+        }
         let result;
         try {
           result = await tryMember(attemptMember, body, stream, signal);

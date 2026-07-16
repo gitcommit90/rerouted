@@ -1,6 +1,6 @@
 {
   "name": "rerouted",
-  "version": "0.4.10",
+  "version": "0.4.11",
   "description": "A macOS menu-bar router for accounts, models, and automatic fallback.",
   "author": "gitcommit90",
   "license": "MIT",

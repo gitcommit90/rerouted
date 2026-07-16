@@ -5,7 +5,7 @@ const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
   window.ReroutedAccountIdentity;
 const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
-const { buildProviderCatalog } = window.ReroutedProviderCatalog;
+const { buildProviderCatalog, canonicalProviderType } = window.ReroutedProviderCatalog;
 const { buildRouteAccountOptions, modelsForRouteAccount } = window.ReroutedRoutePicker;
 const { oauthPrompt } = window.ReroutedOAuthPrompt;
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -156,8 +156,11 @@ function providerLabel(type) {
 }
 
 function providerPresentation(provider) {
+  const key = PROVIDER_PRESENTATION[provider?.id]
+    ? provider.id
+    : canonicalProviderType(provider?.type);
   return (
-    PROVIDER_PRESENTATION[provider?.id] || {
+    PROVIDER_PRESENTATION[key] || {
       description: "Connected provider accounts",
       logo: "custom.svg",
     }
@@ -933,18 +936,6 @@ function tokenMeter(usage) {
     </div>`;
 }
 
-function homeRequestKey(request) {
-  if (!request) return "";
-  return [
-    request.at,
-    request.model,
-    request.providerId,
-    request.providerName,
-    request.providerType,
-    request.status,
-  ].join("|");
-}
-
 function homeRecentHtml(recent) {
   if (!recent.length) {
     return `<div class="empty">No traffic yet. Point a client at the local endpoint to see routing decisions here.</div>`;
@@ -964,43 +955,192 @@ function homeRecentHtml(recent) {
     .join("");
 }
 
+function liveProviders() {
+  return (state?.providers || []).filter(
+    (provider) => provider.enabled !== false && provider.hasToken
+  );
+}
+
+function liveProviderKey(providers) {
+  return providers
+    .map((provider) => `${provider.id}:${provider.enabled}:${provider.hasToken}:${provider.name}`)
+    .join("|");
+}
+
+function liveProviderHtml(providers) {
+  if (!providers.length) {
+    return `<div class="live-provider-empty">Connect a provider to light up the route map.</div>`;
+  }
+  return providers
+    .map((provider, index) => {
+      const presentation = providerPresentation(provider);
+      const account = aliasLabel(provider.accountAlias);
+      const name = provider.name || providerLabel(canonicalProviderType(provider.type));
+      const center = (providers.length - 1) / 2;
+      const archY = Math.round(Math.abs(index - center) * 1.8);
+      return `<span class="live-provider" data-live-provider-id="${esc(provider.id)}" title="${esc(
+        account ? `${name} · ${account}` : name
+      )}" style="--provider-order:${index};--arch-y:${archY}px">
+        <img src="assets/providers/${esc(presentation.logo)}" alt="" />
+        ${account ? `<small>${esc(account.replace("Account ", ""))}</small>` : ""}
+      </span>`;
+    })
+    .join("");
+}
+
+function liveRoutePoint(element, stageRect, edge = "center") {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: rect.left - stageRect.left + rect.width / 2,
+    y:
+      edge === "top"
+        ? rect.top - stageRect.top
+        : edge === "bottom"
+          ? rect.bottom - stageRect.top
+          : rect.top - stageRect.top + rect.height / 2,
+  };
+}
+
+let liveRequestPathKey = "";
+
+function drawLiveRequestPaths({ force = false } = {}) {
+  const stage = view.querySelector("[data-live-router-stage]");
+  const layer = stage?.querySelector("[data-live-route-layer]");
+  const source = stage?.querySelector("[data-live-request-source]");
+  const hub = stage?.querySelector("[data-live-router-hub]");
+  if (!stage || !layer || !source || !hub) return;
+
+  const requests = state?.activeRequests || [];
+  const stageRect = stage.getBoundingClientRect();
+  if (!stageRect.width || !stageRect.height) return;
+  const pathKey = `${Math.round(stageRect.width)}x${Math.round(stageRect.height)}|${requests
+    .map((request) => `${request.id}:${request.providerId || "pending"}`)
+    .join("|")}`;
+  if (!force && pathKey === liveRequestPathKey) return;
+  liveRequestPathKey = pathKey;
+  const sourcePoint = liveRoutePoint(source, stageRect, "top");
+  const hubPoint = liveRoutePoint(hub, stageRect);
+  const providerNodes = new Map(
+    [...stage.querySelectorAll("[data-live-provider-id]")].map((node) => [
+      node.dataset.liveProviderId,
+      node,
+    ])
+  );
+
+  layer.setAttribute("viewBox", `0 0 ${stageRect.width} ${stageRect.height}`);
+  layer.replaceChildren();
+  stage.classList.toggle("has-live-requests", requests.length > 0);
+  hub.classList.toggle("is-active", requests.length > 0);
+  source.classList.toggle("is-active", requests.length > 0);
+  stage.querySelectorAll(".live-provider.is-active").forEach((node) => {
+    node.classList.remove("is-active");
+  });
+
+  const count = requests.length;
+  requests.forEach((request, index) => {
+    const spread = (index - (count - 1) / 2) * 3.2;
+    const targetNode = providerNodes.get(request.providerId);
+    if (targetNode) targetNode.classList.add("is-active");
+    const target = targetNode
+      ? liveRoutePoint(targetNode, stageRect, "bottom")
+      : hubPoint;
+    const startX = sourcePoint.x + spread;
+    const hubX = hubPoint.x + spread * 0.35;
+    let pathData = `M ${startX} ${sourcePoint.y} C ${startX} ${sourcePoint.y - 28}, ${hubX} ${hubPoint.y + 30}, ${hubX} ${hubPoint.y}`;
+    if (targetNode) {
+      pathData += ` C ${hubX} ${hubPoint.y - 34}, ${target.x + spread * 0.2} ${target.y + 28}, ${target.x + spread * 0.2} ${target.y}`;
+    }
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", pathData);
+    path.setAttribute("class", "live-request-path");
+    path.style.setProperty("--flow-delay", `${-(index % 5) * 0.22}s`);
+    layer.append(path);
+  });
+
+  const countText = stage.querySelector("[data-live-request-count]");
+  if (countText) {
+    countText.textContent = count
+      ? `${count} in flight`
+      : "Waiting for traffic";
+  }
+  const routeText = stage.querySelector("[data-live-route-status]");
+  if (routeText) {
+    const routed = requests.filter((request) => request.providerId).length;
+    routeText.textContent = count
+      ? routed === count
+        ? `${count} routing live`
+        : "Choosing a provider"
+      : "Ready";
+  }
+}
+
+function queueLiveRequestPaths(force = false) {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => drawLiveRequestPaths({ force }))
+  );
+}
+
 function homeValues() {
   const s = state.stats || { totalRequests: 0, recent: [] };
   const recent = s.recent || [];
   const online = state.serverListening && state.serverEnabled;
   const last = recent[0];
-  const lastLabel = last ? friendlyRoute(last.model) : "Waiting for first request";
   const u24 = state.usage || {};
   const tokenTotal =
     Number(u24.total_tokens) ||
     Number(u24.prompt_tokens || 0) + Number(u24.completion_tokens || 0) + Number(u24.cached_tokens || 0);
   const errorRate = u24.requests ? Math.round(((u24.errors || 0) / u24.requests) * 100) : 0;
-  return { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate };
+  return {
+    s,
+    recent,
+    online,
+    last,
+    u24,
+    tokenTotal,
+    errorRate,
+    providers: liveProviders(),
+    activeRequests: state.activeRequests || [],
+  };
 }
 
-let homeLastRequestKey = "";
-
-function restartHomeRouteAnimation() {
-  const routeMap = view.querySelector("[data-home-route-map]");
-  if (!routeMap || reducedMotion()) return;
-  routeMap.classList.remove("is-animating");
-  void routeMap.offsetWidth;
-  routeMap.classList.add("is-animating");
-}
+let homeLastProviderKey = "";
 
 function renderHome() {
   if (blockSensitiveRenderIfLocked()) return;
-  const { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate } = homeValues();
-  homeLastRequestKey = homeRequestKey(last);
+  const { s, recent, online, u24, tokenTotal, errorRate, providers, activeRequests } =
+    homeValues();
+  homeLastProviderKey = liveProviderKey(providers);
+  liveRequestPathKey = "";
   view.innerHTML = `
     <div data-home-root>
     ${pageHeader("Wayfinder", "Status", "One local endpoint. Every account and route behind it.")}
-    <section class="hero-surface">
-      <div class="gateway-state"><span class="status-node ${online ? "" : "off"}" data-home-status-node></span><span data-home-gateway>${online ? "Gateway live" : "Gateway stopped"}</span></div>
-      <div class="hero-title" data-home-last-route>${esc(lastLabel)}</div>
-      <div class="hero-sub" data-home-last-meta>${last ? `${esc(last.providerName || last.providerType || "ReRouted")} · ${esc(fmtTime(last.at))}` : "Traffic will appear here as soon as a client connects."}</div>
-      <div class="route-map${reducedMotion() ? "" : " is-animating"}" data-home-route-map aria-hidden="true">
-        <span class="route-source">A</span><span class="route-track"></span><span class="route-source">B</span><span class="route-track"></span><span class="route-destination">/v1</span>
+    <section class="hero-surface live-router-card" data-live-router-card>
+      <div class="live-router-head">
+        <div class="gateway-state"><span class="status-node ${online ? "" : "off"}" data-home-status-node></span><span data-home-gateway>${online ? "Gateway live" : "Gateway stopped"}</span></div>
+        <span class="live-provider-count">${providers.length} connected</span>
+      </div>
+      <div class="live-router-stage" data-live-router-stage aria-label="${esc(
+        activeRequests.length
+          ? `${activeRequests.length} requests currently routing through ReRouted`
+          : "No requests currently routing"
+      )}">
+        <div class="live-provider-label">Enabled providers</div>
+        <div class="live-provider-arch" data-live-provider-arch style="--provider-count:${providers.length}">
+          ${liveProviderHtml(providers)}
+        </div>
+        <svg class="live-route-layer" data-live-route-layer aria-hidden="true"></svg>
+        <div class="live-router-hub" data-live-router-hub>
+          <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M5 5v6c0 2.2 1.8 4 4 4h10"/><path d="m16 11 4 4-4 4"/><circle cx="5" cy="5" r="2"/><circle cx="5" cy="23" r="2"/><path d="M5 21v-2c0-2.2 1.8-4 4-4"/></svg>
+          <span>ReRouted</span>
+          <small data-live-route-status>${activeRequests.length ? "Routing live" : "Ready"}</small>
+        </div>
+        <div class="live-request-source" data-live-request-source>
+          <span class="live-request-pulse" aria-hidden="true"></span>
+          <strong>Requests</strong>
+          <small data-live-request-count>${
+            activeRequests.length ? `${activeRequests.length} in flight` : "Waiting for traffic"
+          }</small>
+        </div>
       </div>
       <div class="endpoint-row"><code data-home-endpoint>${esc(state.endpoint)}</code><button type="button" class="btn btn-secondary btn-sm" id="copy-url">Copy</button></div>
     </section>
@@ -1025,23 +1165,19 @@ function renderHome() {
   `;
   $("#copy-url").onclick = () => copy(state.endpoint);
   wireSecrets();
+  queueLiveRequestPaths();
 }
 
 function updateHome() {
   if (blockSensitiveRenderIfLocked()) return;
   const root = view.querySelector("[data-home-root]");
   if (!root) return renderHome();
-  const { s, recent, online, last, lastLabel, u24, tokenTotal, errorRate } = homeValues();
-  const nextRequestKey = homeRequestKey(last);
-  const hasNewRequest = !!nextRequestKey && nextRequestKey !== homeLastRequestKey;
-  homeLastRequestKey = nextRequestKey;
+  const { s, recent, online, u24, tokenTotal, errorRate, providers } = homeValues();
+  const nextProviderKey = liveProviderKey(providers);
+  if (nextProviderKey !== homeLastProviderKey) return renderHome();
 
   root.querySelector("[data-home-status-node]")?.classList.toggle("off", !online);
   root.querySelector("[data-home-gateway]").textContent = online ? "Gateway live" : "Gateway stopped";
-  root.querySelector("[data-home-last-route]").textContent = lastLabel;
-  root.querySelector("[data-home-last-meta]").textContent = last
-    ? `${last.providerName || last.providerType || "ReRouted"} · ${fmtTime(last.at)}`
-    : "Traffic will appear here as soon as a client connects.";
   root.querySelector("[data-home-endpoint]").textContent = state.endpoint;
   root.querySelector("[data-home-requests]").textContent = fmtNum(u24.requests || 0);
   root.querySelector("[data-home-tokens]").textContent = fmtNum(tokenTotal);
@@ -1056,7 +1192,7 @@ function updateHome() {
     const shown = secret.dataset.shown === "1";
     secret.querySelector(".secret-val").textContent = shown ? state.apiKey : maskSecret(state.apiKey);
   }
-  if (hasNewRequest) restartHomeRouteAnimation();
+  queueLiveRequestPaths();
 }
 
 const OAUTH_TYPES = new Set(["chatgpt", "codex", "claude", "antigravity", "xai"]);
@@ -2328,6 +2464,14 @@ api.on("app:update-state", (update) => {
   if (page === "settings") render();
 });
 
+api.on("app:request-activity", (activity) => {
+  if (!state || !Array.isArray(activity?.active)) return;
+  state.activeRequests = activity.active;
+  if (page === "home") {
+    drawLiveRequestPaths();
+  }
+});
+
 api.on("app:provider-identities-updated", async () => {
   await refresh();
   if (quotaState?.accounts?.length) {
@@ -2368,4 +2512,5 @@ window.__rr_goto_page = (p) => {
   }
   render();
 };
+window.addEventListener("resize", () => queueLiveRequestPaths(true));
 boot();
