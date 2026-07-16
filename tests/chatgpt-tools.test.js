@@ -311,6 +311,56 @@ describe("ChatGPT Responses tool translation", () => {
     assert.equal(next.input[1].encrypted_content, "encrypted-json-reasoning");
   });
 
+  it("keeps structured reasoning out of visible JSON and streaming content", async () => {
+    const json = chatgpt.fromResponsesJson(
+      {
+        output: [
+          {
+            id: "rs_hidden",
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "Private planning" }],
+          },
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Visible answer" }],
+          },
+        ],
+      },
+      "gpt-5.6-sol"
+    );
+    assert.equal(json.choices[0].message.content, "Visible answer");
+
+    const events = [
+      {
+        type: "response.reasoning_summary_text.delta",
+        delta: "Private streamed planning",
+      },
+      { type: "response.output_text.delta", delta: "Visible streamed answer" },
+      { type: "response.completed" },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`);
+
+    const collected = await chatgpt.pipeResponsesSse(
+      Readable.from(events),
+      null,
+      "gpt-5.6-sol",
+      { collect: true }
+    );
+    assert.equal(collected.choices[0].message.content, "Visible streamed answer");
+
+    const writes = [];
+    await chatgpt.pipeResponsesSse(
+      Readable.from(events),
+      { write(chunk) { writes.push(chunk); } },
+      "gpt-5.6-sol"
+    );
+    const visibleContent = parseSseWrites(writes)
+      .map((chunk) => chunk.choices[0].delta.content || "")
+      .join("");
+    assert.equal(visibleContent, "Visible streamed answer");
+    assert.doesNotMatch(writes.join(""), /Private streamed planning/);
+  });
+
   it("replays multiple reasoning phases once in their original call order", () => {
     const first = chatgpt.fromResponsesJson(
       {

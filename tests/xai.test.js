@@ -197,6 +197,7 @@ describe("xAI OAuth Responses transport", () => {
   it("collects non-stream output and relays streaming output and errors", async () => {
     const events = [
       'event: response.created\ndata: {"type":"response.created"}\n\n',
+      'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","delta":"Private planning"}\n\n',
       'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Hel"}\n\n',
       'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"lo"}\n\n',
       'event: response.completed\ndata: {"type":"response.completed"}\n\n',
@@ -216,6 +217,7 @@ describe("xAI OAuth Responses transport", () => {
     const output = chunks.join("");
     assert.match(output, /chat\.completion\.chunk/);
     assert.match(output, /\[DONE\]/);
+    assert.doesNotMatch(output, /Private planning/);
 
     await assert.rejects(
       xai.pipeResponsesSse(
