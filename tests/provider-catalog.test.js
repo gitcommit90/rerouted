@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
+  buildEnabledProviderGroups,
   buildProviderCatalog,
   canonicalProviderType,
 } = require("../src/renderer/provider-catalog");
@@ -103,5 +104,22 @@ describe("provider-first catalog", () => {
     });
     assert.equal(catalog[2].name, "Mystery Provider");
     assert.deepEqual(catalog[2].accounts, providers.slice(2));
+  });
+
+  it("builds one enabled live node per canonical provider, not per account", () => {
+    const providers = [
+      { id: "chatgpt_one", type: "chatgpt", enabled: true, hasToken: true },
+      { id: "chatgpt_two", type: "codex", enabled: true, hasToken: true },
+      { id: "claude_disabled", type: "claude", enabled: false, hasToken: true },
+      { id: "xai_signed_out", type: "xai", enabled: true, hasToken: false },
+      { id: "custom_one", type: "openai-compat", enabled: true, hasToken: true },
+      { id: "custom_two", type: "custom", enabled: true, hasToken: true },
+    ];
+
+    const groups = buildEnabledProviderGroups(providers);
+
+    assert.deepEqual(groups.map((group) => group.id), ["chatgpt", "custom"]);
+    assert.deepEqual(groups[0].accounts, providers.slice(0, 2));
+    assert.deepEqual(groups[1].accounts, providers.slice(4));
   });
 });
