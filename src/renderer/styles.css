@@ -664,23 +664,6 @@ summary:focus-visible,
   object-fit: contain;
 }
 
-.live-provider small {
-  position: absolute;
-  right: -2px;
-  bottom: -3px;
-  display: grid;
-  min-width: 12px;
-  height: 12px;
-  padding: 0 3px;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  border-radius: 999px;
-  color: #fff;
-  background: var(--night-soft);
-  font-size: 7px;
-  font-weight: 750;
-}
-
 .live-provider.is-active {
   border-color: rgba(239, 91, 42, 0.95);
   box-shadow: 0 0 0 3px rgba(239, 91, 42, 0.16), 0 8px 22px rgba(0, 0, 0, 0.22);

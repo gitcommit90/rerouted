@@ -5,7 +5,8 @@ const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
   window.ReroutedAccountIdentity;
 const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
-const { buildProviderCatalog, canonicalProviderType } = window.ReroutedProviderCatalog;
+const { buildEnabledProviderGroups, buildProviderCatalog, canonicalProviderType } =
+  window.ReroutedProviderCatalog;
 const { buildRouteAccountOptions, modelsForRouteAccount } = window.ReroutedRoutePicker;
 const { oauthPrompt } = window.ReroutedOAuthPrompt;
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -110,6 +111,7 @@ const PROVIDER_LABELS = {
   cloudflare: "Cloudflare",
   glm: "GLM Coding",
   "openai-compat": "API key",
+  custom: "Custom",
 };
 
 const PROVIDER_PRESENTATION = {
@@ -956,15 +958,14 @@ function homeRecentHtml(recent) {
 }
 
 function liveProviders() {
-  return (state?.providers || []).filter(
-    (provider) => provider.enabled !== false && provider.hasToken
-  );
+  return buildEnabledProviderGroups(state?.providers || []).map((provider) => ({
+    ...provider,
+    name: providerLabel(provider.id),
+  }));
 }
 
 function liveProviderKey(providers) {
-  return providers
-    .map((provider) => `${provider.id}:${provider.enabled}:${provider.hasToken}:${provider.name}`)
-    .join("|");
+  return providers.map((provider) => provider.id).join("|");
 }
 
 function liveProviderHtml(providers) {
@@ -974,15 +975,13 @@ function liveProviderHtml(providers) {
   return providers
     .map((provider, index) => {
       const presentation = providerPresentation(provider);
-      const account = aliasLabel(provider.accountAlias);
-      const name = provider.name || providerLabel(canonicalProviderType(provider.type));
+      const name = provider.name || providerLabel(provider.id);
       const center = (providers.length - 1) / 2;
       const archY = Math.round(Math.abs(index - center) * 1.8);
       return `<span class="live-provider" data-live-provider-id="${esc(provider.id)}" title="${esc(
-        account ? `${name} · ${account}` : name
+        name
       )}" style="--provider-order:${index};--arch-y:${archY}px">
         <img src="assets/providers/${esc(presentation.logo)}" alt="" />
-        ${account ? `<small>${esc(account.replace("Account ", ""))}</small>` : ""}
       </span>`;
     })
     .join("");
@@ -1014,7 +1013,10 @@ function drawLiveRequestPaths({ force = false } = {}) {
   const stageRect = stage.getBoundingClientRect();
   if (!stageRect.width || !stageRect.height) return;
   const pathKey = `${Math.round(stageRect.width)}x${Math.round(stageRect.height)}|${requests
-    .map((request) => `${request.id}:${request.providerId || "pending"}`)
+    .map(
+      (request) =>
+        `${request.id}:${canonicalProviderType(request.providerType) || "pending"}`
+    )
     .join("|")}`;
   if (!force && pathKey === liveRequestPathKey) return;
   liveRequestPathKey = pathKey;
@@ -1039,7 +1041,7 @@ function drawLiveRequestPaths({ force = false } = {}) {
   const count = requests.length;
   requests.forEach((request, index) => {
     const spread = (index - (count - 1) / 2) * 3.2;
-    const targetNode = providerNodes.get(request.providerId);
+    const targetNode = providerNodes.get(canonicalProviderType(request.providerType));
     if (targetNode) targetNode.classList.add("is-active");
     const target = targetNode
       ? liveRoutePoint(targetNode, stageRect, "bottom")
@@ -1065,7 +1067,7 @@ function drawLiveRequestPaths({ force = false } = {}) {
   }
   const routeText = stage.querySelector("[data-live-route-status]");
   if (routeText) {
-    const routed = requests.filter((request) => request.providerId).length;
+    const routed = requests.filter((request) => request.providerType).length;
     routeText.textContent = count
       ? routed === count
         ? `${count} routing live`
@@ -1117,7 +1119,7 @@ function renderHome() {
     <section class="hero-surface live-router-card" data-live-router-card>
       <div class="live-router-head">
         <div class="gateway-state"><span class="status-node ${online ? "" : "off"}" data-home-status-node></span><span data-home-gateway>${online ? "Gateway live" : "Gateway stopped"}</span></div>
-        <span class="live-provider-count">${providers.length} connected</span>
+        <span class="live-provider-count">${providers.length} provider${providers.length === 1 ? "" : "s"}</span>
       </div>
       <div class="live-router-stage" data-live-router-stage aria-label="${esc(
         activeRequests.length

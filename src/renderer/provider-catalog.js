@@ -95,7 +95,26 @@
     return entries;
   }
 
-  const api = { buildProviderCatalog, canonicalProviderType };
+  function buildEnabledProviderGroups(providers = []) {
+    const groups = [];
+    const groupsById = new Map();
+
+    for (const account of providers) {
+      if (account?.enabled === false || !account?.hasToken) continue;
+      const id = canonicalProviderType(account.type) || "unknown";
+      let group = groupsById.get(id);
+      if (!group) {
+        group = { id, type: id, accounts: [] };
+        groups.push(group);
+        groupsById.set(id, group);
+      }
+      group.accounts.push(account);
+    }
+
+    return groups;
+  }
+
+  const api = { buildProviderCatalog, buildEnabledProviderGroups, canonicalProviderType };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (root) root.ReroutedProviderCatalog = api;
 })(typeof window !== "undefined" ? window : null);

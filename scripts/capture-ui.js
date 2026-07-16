@@ -743,7 +743,7 @@ app.whenReady().then(async () => {
         !routeStage ||
         !path ||
         routeStage.querySelectorAll(".live-request-path").length !== 2 ||
-        routeStage.querySelectorAll(".live-provider").length !== 5 ||
+        routeStage.querySelectorAll(".live-provider").length !== 4 ||
         !copyButton
       ) {
         throw new Error("Status persistence controls did not render");
