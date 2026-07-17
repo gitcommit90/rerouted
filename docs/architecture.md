@@ -49,7 +49,8 @@ The renderer is vanilla HTML, CSS, and JavaScript. It renders onboarding and the
 | `GET /` | None | Same process health response as `/health` |
 | `GET /health` | None | App name and current listening port |
 | `GET /v1/models` | Bearer key | Enabled provider models plus named route IDs |
-| `POST /v1/chat/completions` | Bearer key | Streaming or non-streaming routed completion |
+| `POST /v1/chat/completions` | Bearer key | Streaming or non-streaming routed chat completion |
+| `POST /v1/responses` | Bearer key | Responses requests adapted through the chat-completions router |
 
 The default bind is `127.0.0.1:4949`. Settings can switch the host to `0.0.0.0` for LAN or Tailscale access. CORS is currently `*`, so the bearer key is the gateway's access boundary when network binding is enabled.
 

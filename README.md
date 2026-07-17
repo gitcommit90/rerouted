@@ -159,7 +159,8 @@ The gateway continues running when the panel is hidden. Quitting ReRouted stops 
 | `GET /` | Same unauthenticated local health response as `/health` |
 | `GET /health` | Local gateway health and listening port |
 | `GET /v1/models` | Enabled direct models and named routes |
-| `POST /v1/chat/completions` | Streaming or non-streaming routed completions |
+| `POST /v1/chat/completions` | Streaming or non-streaming routed chat completions |
+| `POST /v1/responses` | Streaming or non-streaming routed Responses API requests |
 
 Requests require a generated bearer key except for `/` and `/health`. OpenAI-style image inputs inside chat-completion messages are supported when the selected upstream model accepts them. The separate `/v1/images` generation API, embeddings, audio, and the rest of the OpenAI platform API are outside ReRouted's scope.
 

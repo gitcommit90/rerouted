@@ -3,13 +3,19 @@
 const http = require("node:http");
 const { DEFAULT_PORT } = require("./constants");
 const logger = require("./logger");
+const {
+  toChatCompletionsBody,
+  fromChatCompletion,
+  pipeChatCompletionsSseToResponses,
+  toResponsesError,
+} = require("./responses-api");
 
 const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
 
 /**
  * OpenAI-compatible HTTP gateway.
  * Auth: Authorization: Bearer <apiKey>
- * Routes: GET /v1/models, POST /v1/chat/completions, GET /health
+ * Routes: GET /v1/models, POST /v1/chat/completions, POST /v1/responses, GET /health
  */
 function createGateway({
   store,
@@ -160,13 +166,15 @@ function createGateway({
         return;
       }
 
-      if (req.method === "POST" && path === "/v1/chat/completions") {
+      if (req.method === "POST" && (path === "/v1/chat/completions" || path === "/v1/responses")) {
+        const responsesRequest = path === "/v1/responses";
+        const routeName = responsesRequest ? "responses" : "chat/completions";
         let body;
         try {
           body = await readBody(req);
         } catch (error) {
           if (error?.code === "REQUEST_BODY_TOO_LARGE") {
-            logger.warn("chat/completions: request body too large");
+            logger.warn(`${routeName}: request body too large`);
             res.writeHead(413, { "Content-Type": "application/json" });
             res.end(
               JSON.stringify({
@@ -179,7 +187,7 @@ function createGateway({
             );
             return;
           }
-          logger.warn("chat/completions: invalid JSON body");
+          logger.warn(`${routeName}: invalid JSON body`);
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(
             JSON.stringify({
@@ -189,7 +197,7 @@ function createGateway({
           return;
         }
         if (!body.model) {
-          logger.warn("chat/completions: missing model");
+          logger.warn(`${routeName}: missing model`);
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(
             JSON.stringify({
@@ -199,7 +207,16 @@ function createGateway({
           return;
         }
 
-        logger.info("chat/completions request", {
+        let routerBody;
+        try {
+          routerBody = responsesRequest ? toChatCompletionsBody(body) : body;
+        } catch (error) {
+          logger.warn(`${routeName}: invalid request`, { error: error.message });
+          res.writeHead(error.status || 400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(toResponsesError(error)));
+          return;
+        }
+        logger.info(`${routeName} request`, {
           model: body.model,
           stream: !!body.stream,
         });
@@ -217,23 +234,23 @@ function createGateway({
         res.once("close", onClientAbort);
         try {
           const result = await router.chatCompletions({
-            body,
+            body: routerBody,
             signal: clientAbort.signal,
             onProviderSelected: (provider) => requestActivity?.route(activityId, provider),
           });
           if (!result.ok) {
             activityStatus = result.status || 502;
             activityOutcome = result.status === 499 ? "canceled" : "error";
-            logger.error("chat/completions failed", {
+            logger.error(`${routeName} failed`, {
               model: body.model,
               status: result.status,
               error: result.error?.error?.message || result.error,
             });
             res.writeHead(result.status || 502, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(result.error));
+            res.end(JSON.stringify(responsesRequest ? toResponsesError(result.error) : result.error));
             return;
           }
-          logger.info("chat/completions ok", {
+          logger.info(`${routeName} ok`, {
             model: body.model,
             stream: !!result.stream,
             providerId: result.providerId,
@@ -247,24 +264,36 @@ function createGateway({
               Connection: "keep-alive",
             });
             try {
-              await result.streamPipe(res);
+              if (responsesRequest) {
+                await pipeChatCompletionsSseToResponses(result.streamPipe, res, body.model, body);
+              } else {
+                await result.streamPipe(res);
+              }
               activityStatus = 200;
               activityOutcome = "success";
             } catch (e) {
               activityStatus = clientAbort.signal.aborted ? 499 : 502;
               activityOutcome = clientAbort.signal.aborted ? "canceled" : "error";
               if (!res.writableEnded) {
-                res.write(
-                  `data: ${JSON.stringify({ error: { message: e.message } })}\n\n`
-                );
+                 if (!responsesRequest) {
+                   res.write(
+                     `data: ${JSON.stringify({ error: { message: e.message } })}\n\n`
+                   );
+                 }
               }
             }
             if (!res.writableEnded) res.end();
             return;
           }
 
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(result.openAiJson));
+           res.writeHead(200, { "Content-Type": "application/json" });
+           res.end(
+             JSON.stringify(
+               responsesRequest
+                  ? fromChatCompletion(result.openAiJson, body.model, body)
+                 : result.openAiJson
+             )
+           );
           activityStatus = 200;
           activityOutcome = "success";
           return;
