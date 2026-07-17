@@ -347,6 +347,111 @@ describe("gateway auth + models + chat", () => {
   });
 });
 
+describe("gateway Responses API", () => {
+  it("routes non-streaming requests through chatCompletions", async () => {
+    const store = createStore(tmpConfig());
+    const apiKey = store.load().apiKey;
+    let routedBody;
+    const gateway = createGateway({
+      store,
+      router: {
+        async chatCompletions({ body }) {
+          routedBody = body;
+          return {
+            ok: true,
+            stream: false,
+            openAiJson: {
+              id: "chatcmpl_test",
+              model: "upstream-model",
+              choices: [{ message: { role: "assistant", content: "Hello" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+            },
+          };
+        },
+      },
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "route", instructions: "Help", input: "Hi" }),
+      });
+      const json = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(routedBody.model, "route");
+      assert.deepEqual(routedBody.messages, [
+        { role: "system", content: "Help" },
+        { role: "user", content: "Hi" },
+      ]);
+      assert.equal(json.object, "response");
+      assert.equal(json.output[0].content[0].text, "Hello");
+      assert.equal(json.usage.input_tokens, 2);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("returns Responses SSE and preserves router errors", async () => {
+    const store = createStore(tmpConfig());
+    const apiKey = store.load().apiKey;
+    const gateway = createGateway({
+      store,
+      router: {
+        async chatCompletions({ body }) {
+          if (body.model === "missing") {
+            return {
+              ok: false,
+              status: 404,
+              error: { error: { message: "Missing", type: "invalid_request_error", code: "model_not_found" } },
+            };
+          }
+          return {
+            ok: true,
+            stream: true,
+            streamPipe: async (sink) => {
+              sink.write(
+                `data: ${JSON.stringify({ choices: [{ delta: { role: "assistant", content: "Hello" } }] })}\n\n`
+              );
+              sink.write("data: [DONE]\n\n");
+              return { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+            },
+          };
+        },
+      },
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const streamResponse = await fetch(`http://127.0.0.1:${server.address().port}/v1/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "route", input: "Hi", stream: true }),
+      });
+      const streamText = await streamResponse.text();
+      assert.match(streamResponse.headers.get("content-type"), /text\/event-stream/);
+      assert.match(streamText, /event: response\.output_text\.delta/);
+      assert.match(streamText, /event: response\.completed/);
+
+      const errorResponse = await fetch(`http://127.0.0.1:${server.address().port}/v1/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "missing", input: "Hi" }),
+      });
+      const error = await errorResponse.json();
+      assert.equal(errorResponse.status, 404);
+      assert.deepEqual(error, {
+        error: { message: "Missing", type: "invalid_request_error", code: "model_not_found" },
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
+
 describe("gateway request limits", () => {
   it("returns JSON 413 before routing an oversized chunked request", async () => {
     const store = createStore(tmpConfig());
