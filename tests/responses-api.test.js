@@ -183,6 +183,39 @@ describe("Responses API adapter", () => {
     assert.equal(body.max_output_tokens, 4096);
   });
 
+  it("merges Codex additional tools without creating a message", () => {
+    const grammar = { type: "grammar", syntax: "lark", definition: "start: /.+/" };
+    const body = toChatCompletionsBody({
+      model: "coding-route",
+      input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [
+            { type: "custom", name: "shell", description: "Run a command", format: grammar },
+            { type: "function", name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } },
+          ],
+        },
+        { type: "message", role: "user", content: "Inspect it" },
+      ],
+      tools: [{ type: "namespace", name: "workspace", tools: [] }],
+    });
+
+    assert.deepEqual(body.messages, [{ role: "user", content: "Inspect it" }]);
+    assert.deepEqual(body.tools, [
+      { type: "namespace", name: "workspace", tools: [] },
+      { type: "custom", name: "shell", description: "Run a command", format: grammar },
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+    ]);
+  });
+
+  it("does not let arbitrary role-bearing typed items bypass validation", () => {
+    assert.throws(
+      () => toChatCompletionsBody({ model: "route", input: [{ type: "unknown", role: "developer" }] }),
+      (error) => error.status === 400 && error.error.param === "input[0].type"
+    );
+  });
+
   it("accepts the live Codex singleton content payload", () => {
     const request = {
       model: "coding-route",
