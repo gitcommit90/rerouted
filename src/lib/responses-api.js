@@ -38,14 +38,7 @@ function validateResponsesRequest(body) {
   if (body.max_output_tokens != null && (!Number.isInteger(body.max_output_tokens) || body.max_output_tokens < 1)) {
     throw invalid("max_output_tokens must be a positive integer", "max_output_tokens");
   }
-  if (Array.isArray(body.tools)) {
-    body.tools.forEach((tool, index) => {
-      if (!isObject(tool) || typeof tool.type !== "string") throw invalid("Each tool must be an object with a type", `tools[${index}]`);
-      if (tool.type === "function" && (typeof tool.name !== "string" || !tool.name)) {
-        throw invalid("Function tools require a name", `tools[${index}].name`);
-      }
-    });
-  }
+  if (Array.isArray(body.tools)) validateTools(body.tools, "tools");
   if (Array.isArray(body.input)) {
     body.input.forEach((item, index) => validateInputItem(item, `input[${index}]`));
   }
@@ -88,8 +81,22 @@ function reasoningItemsFromCall(call) {
   return Array.isArray(items) ? items.map(encryptedReasoningItem).filter(Boolean) : [];
 }
 
+function validateTools(tools, param) {
+  tools.forEach((tool, index) => {
+    if (!isObject(tool) || typeof tool.type !== "string") throw invalid("Each tool must be an object with a type", `${param}[${index}]`);
+    if (tool.type === "function" && (typeof tool.name !== "string" || !tool.name)) {
+      throw invalid("Function tools require a name", `${param}[${index}].name`);
+    }
+  });
+}
+
 function validateInputItem(item, param) {
   if (!isObject(item)) throw invalid("Input items must be objects", param);
+  if (item.type === "additional_tools") {
+    if (!Array.isArray(item.tools)) throw invalid("additional_tools tools must be an array", `${param}.tools`);
+    validateTools(item.tools, `${param}.tools`);
+    return;
+  }
   if (item.type === "reasoning") {
     if (item.encrypted_content != null && typeof item.encrypted_content !== "string") {
       throw invalid("reasoning encrypted_content must be a string or null", `${param}.encrypted_content`);
@@ -110,7 +117,7 @@ function validateInputItem(item, param) {
     if (!(typeof item.output === "string" || Array.isArray(item.output))) throw invalid("function_call_output requires string or array output", `${param}.output`);
     return;
   }
-  if (item.type !== "message" && !item.role) throw invalid("Unsupported input item", `${param}.type`);
+  if (item.type !== undefined && item.type !== "message") throw invalid("Unsupported input item", `${param}.type`);
   if (!["user", "assistant", "system", "developer"].includes(item.role)) throw invalid("Invalid message role", `${param}.role`);
   if (item.content == null) {
     if (item.role !== "assistant") throw invalid("Message content must be a string, content part, or array", `${param}.content`);
@@ -129,6 +136,7 @@ function inputMessages(input) {
   let pendingAssistant = null;
   let pendingReasoning = [];
   for (const item of input) {
+    if (item.type === "additional_tools") continue;
     if (item.type === "reasoning") {
       const reasoning = encryptedReasoningItem(item);
       if (reasoning) pendingReasoning.push(reasoning);
@@ -191,7 +199,11 @@ function toChatCompletionsBody(body) {
   const messages = inputMessages(body.input);
   if (body.instructions != null) messages.unshift({ role: "system", content: body.instructions });
   const out = { model: body.model, messages, stream: !!body.stream };
-  const tools = toChatTools(body.tools);
+  const declaredTools = [
+    ...(body.tools || []),
+    ...(Array.isArray(body.input) ? body.input.filter((item) => item.type === "additional_tools").flatMap((item) => item.tools) : []),
+  ];
+  const tools = toChatTools(declaredTools);
   if (tools) out.tools = tools;
   if (body.tool_choice !== undefined) out.tool_choice = toChatToolChoice(body.tool_choice);
   if (body.reasoning !== undefined) out.reasoning = { ...body.reasoning };

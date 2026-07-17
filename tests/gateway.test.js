@@ -394,6 +394,56 @@ describe("gateway Responses API", () => {
     }
   });
 
+  it("routes Codex additional tools without a bogus message", async () => {
+    const store = createStore(tmpConfig());
+    const apiKey = store.load().apiKey;
+    let routedBody;
+    const gateway = createGateway({
+      store,
+      router: {
+        async chatCompletions({ body }) {
+          routedBody = body;
+          return {
+            ok: true,
+            stream: false,
+            openAiJson: {
+              id: "chatcmpl_additional_tools",
+              choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+            },
+          };
+        },
+      },
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "route",
+          input: [{
+            type: "additional_tools",
+            role: "developer",
+            tools: [
+              { type: "custom", name: "shell", format: { type: "grammar", syntax: "lark", definition: "start: /.+/" } },
+              { type: "function", name: "read_file", parameters: { type: "object" } },
+            ],
+          }],
+          tools: [{ type: "namespace", name: "workspace", tools: [] }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(routedBody.messages, []);
+      assert.deepEqual(routedBody.tools.map((tool) => tool.type), ["namespace", "custom", "function"]);
+      assert.equal(routedBody.tools[1].format.definition, "start: /.+/");
+      assert.equal(routedBody.tools[2].function.name, "read_file");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it("routes the live Codex singleton content payload", async () => {
     const store = createStore(tmpConfig());
     const apiKey = store.load().apiKey;
