@@ -24,7 +24,7 @@
 </div>
 
 <p align="center">
-  <img src="./docs/images/product-tour.webp" width="900" alt="Animated product tour of ReRouted accounts, routes, activity, and status" />
+  <img src="./docs/images/product-tour.gif" width="900" alt="ReRouted Status panel — local gateway, providers, and live traffic" />
 </p>
 
 ## One URL. The routing decision lives somewhere sane.
