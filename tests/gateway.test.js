@@ -394,6 +394,48 @@ describe("gateway Responses API", () => {
     }
   });
 
+  it("routes the live Codex singleton content payload", async () => {
+    const store = createStore(tmpConfig());
+    const apiKey = store.load().apiKey;
+    let routedBody;
+    const gateway = createGateway({
+      store,
+      router: {
+        async chatCompletions({ body }) {
+          routedBody = body;
+          return {
+            ok: true,
+            stream: false,
+            openAiJson: {
+              id: "chatcmpl_singleton",
+              choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+            },
+          };
+        },
+      },
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "route",
+          input: [{ type: "message", role: "user", content: { type: "input_text", text: "hello" } }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(routedBody.messages, [
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+      ]);
+      assert.equal((await response.json()).output[0].content[0].text, "ok");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it("returns Responses SSE and preserves router errors", async () => {
     const store = createStore(tmpConfig());
     const apiKey = store.load().apiKey;

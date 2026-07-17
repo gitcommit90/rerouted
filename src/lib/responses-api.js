@@ -65,6 +65,13 @@ function validateContentPart(part, param) {
   }
 }
 
+function normalizeContentParts(value, param) {
+  if (Array.isArray(value)) return value;
+  if (!isObject(value)) return value;
+  validateContentPart(value, param);
+  return [value];
+}
+
 function encryptedReasoningItem(item) {
   if (!isObject(item) || item.type !== "reasoning" || typeof item.encrypted_content !== "string") return null;
   const copy = { type: "reasoning" };
@@ -84,8 +91,13 @@ function reasoningItemsFromCall(call) {
 function validateInputItem(item, param) {
   if (!isObject(item)) throw invalid("Input items must be objects", param);
   if (item.type === "reasoning") {
-    if (!encryptedReasoningItem(item)) throw invalid("reasoning requires encrypted_content", `${param}.encrypted_content`);
+    if (item.encrypted_content != null && typeof item.encrypted_content !== "string") {
+      throw invalid("reasoning encrypted_content must be a string or null", `${param}.encrypted_content`);
+    }
     return;
+  }
+  if (item.type === "item_reference") {
+    throw invalid("item_reference is not supported by this stateless gateway; send the referenced item in input", param);
   }
   if (item.type === "function_call") {
     if (typeof item.call_id !== "string" || !item.call_id) throw invalid("function_call requires call_id", `${param}.call_id`);
@@ -100,7 +112,14 @@ function validateInputItem(item, param) {
   }
   if (item.type !== "message" && !item.role) throw invalid("Unsupported input item", `${param}.type`);
   if (!["user", "assistant", "system", "developer"].includes(item.role)) throw invalid("Invalid message role", `${param}.role`);
-  if (!(typeof item.content === "string" || Array.isArray(item.content))) throw invalid("Message content must be a string or array", `${param}.content`);
+  if (item.content == null) {
+    if (item.role !== "assistant") throw invalid("Message content must be a string, content part, or array", `${param}.content`);
+    return;
+  }
+  item.content = normalizeContentParts(item.content, `${param}.content`);
+  if (!(typeof item.content === "string" || Array.isArray(item.content))) {
+    throw invalid("Message content must be a string, content part, or array", `${param}.content`);
+  }
   if (Array.isArray(item.content)) item.content.forEach((part, index) => validateContentPart(part, `${param}.content[${index}]`));
 }
 
@@ -111,7 +130,8 @@ function inputMessages(input) {
   let pendingReasoning = [];
   for (const item of input) {
     if (item.type === "reasoning") {
-      pendingReasoning.push(encryptedReasoningItem(item));
+      const reasoning = encryptedReasoningItem(item);
+      if (reasoning) pendingReasoning.push(reasoning);
       continue;
     }
     if (item.type === "function_call") {

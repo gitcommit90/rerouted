@@ -183,6 +183,58 @@ describe("Responses API adapter", () => {
     assert.equal(body.max_output_tokens, 4096);
   });
 
+  it("accepts the live Codex singleton content payload", () => {
+    const request = {
+      model: "coding-route",
+      input: [
+        { type: "message", role: "user", content: { type: "input_text", text: "hello" } },
+      ],
+    };
+    const body = toChatCompletionsBody(request);
+    assert.deepEqual(request.input[0].content, [{ type: "input_text", text: "hello" }]);
+    assert.deepEqual(body.messages, [{ role: "user", content: [{ type: "text", text: "hello" }] }]);
+  });
+
+  it("accepts supported singleton parts, empty assistant content, and nullable reasoning", () => {
+    const body = toChatCompletionsBody({
+      model: "route",
+      input: [
+        { type: "message", role: "user", content: { type: "input_image", image_url: "data:image/png;base64,QUJD" } },
+        { type: "message", role: "assistant", content: null },
+        { type: "message", role: "assistant" },
+        { type: "reasoning", id: "rs_unavailable", encrypted_content: null, summary: [] },
+        { type: "function_call", call_id: "call_1", name: "shell", arguments: "{}" },
+      ],
+    });
+    assert.equal(body.messages[0].content[0].type, "image_url");
+    assert.deepEqual(body.messages.slice(1, 3), [
+      { role: "assistant", content: null },
+      { role: "assistant", content: undefined },
+    ]);
+    assert.equal(body.messages[3].tool_calls[0].extra_content, undefined);
+  });
+
+  it("rejects arbitrary singleton objects and invalid adjacent shapes", () => {
+    for (const [content, param] of [
+      [{ foo: "bar" }, "input[0].content"],
+      [{ type: "input_text", text: 1 }, "input[0].content.text"],
+      [{ type: "unknown", text: "x" }, "input[0].content.type"],
+    ]) {
+      assert.throws(
+        () => toChatCompletionsBody({ model: "route", input: [{ type: "message", role: "user", content }] }),
+        (error) => error.status === 400 && error.error.param === param
+      );
+    }
+    assert.throws(
+      () => toChatCompletionsBody({ model: "route", input: [{ type: "message", role: "user", content: null }] }),
+      (error) => error.status === 400 && error.error.param === "input[0].content"
+    );
+    assert.throws(
+      () => toChatCompletionsBody({ model: "route", input: [{ type: "reasoning", encrypted_content: {} }] }),
+      (error) => error.status === 400 && error.error.param === "input[0].encrypted_content"
+    );
+  });
+
   it("rejects malformed input and stateless continuation IDs", () => {
     assert.throws(
       () => toChatCompletionsBody({ model: "route", input: [{ type: "function_call", name: "x", arguments: "{}" }] }),
@@ -191,6 +243,10 @@ describe("Responses API adapter", () => {
     assert.throws(
       () => toChatCompletionsBody({ model: "route", input: "hi", previous_response_id: "resp_prior" }),
       (error) => error.status === 400 && error.error.param === "previous_response_id"
+    );
+    assert.throws(
+      () => toChatCompletionsBody({ model: "route", input: [{ type: "item_reference", id: "rs_prior" }] }),
+      (error) => error.status === 400 && error.error.param === "input[0]" && /stateless/.test(error.message)
     );
   });
 
