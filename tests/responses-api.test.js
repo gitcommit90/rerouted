@@ -209,6 +209,35 @@ describe("Responses API adapter", () => {
     ]);
   });
 
+  it("round-trips custom calls, outputs, and mixed non-stream output", () => {
+    const output = [
+      { type: "input_text", text: "Script completed..." },
+      { type: "input_text", text: "{...TOOL_EXEC_OK...}" },
+    ];
+    const routed = toChatCompletionsBody({
+      model: "route",
+      input: [
+        { type: "custom_tool_call", call_id: "call_capture", name: "exec", input: "pwd" },
+        { type: "custom_tool_call_output", call_id: "call_capture", output },
+      ],
+    });
+    assert.deepEqual(routed.messages, [
+      { role: "assistant", content: null, tool_calls: [{ id: "call_capture", type: "custom", custom: { name: "exec", input: "pwd" } }] },
+      { role: "tool", tool_call_id: "call_capture", content: output, extra_content: { openai: { custom_tool_call_output: true } } },
+    ]);
+    const response = fromChatCompletion({ id: "chatcmpl_custom", choices: [{ message: { role: "assistant", content: "running", tool_calls: routed.messages[0].tool_calls } }] }, "route");
+    assert.deepEqual(response.output.map((item) => item.type), ["message", "custom_tool_call"]);
+    assert.equal(response.output[1].input, "pwd");
+  });
+
+  it("rejects malformed custom call input and output", () => {
+    assert.throws(() => toChatCompletionsBody({ model: "route", input: [{ type: "custom_tool_call", call_id: "x", name: "exec", input: {} }] }), (error) => error.error.param === "input[0].input");
+    assert.throws(() => toChatCompletionsBody({ model: "route", input: [{ type: "custom_tool_call_output", call_id: "x", output: {} }] }), (error) => error.error.param === "input[0].output");
+    assert.throws(() => toChatCompletionsBody({ model: "route", input: [{ type: "custom_tool_call_output", call_id: "x", output: ["text"] }] }), (error) => error.error.param === "input[0].output[0]");
+    assert.throws(() => toChatCompletionsBody({ model: "route", input: [{ type: "custom_tool_call_output", call_id: "x", output: [{ type: "input_text", text: 1 }] }] }), (error) => error.error.param === "input[0].output[0].text");
+    assert.throws(() => toChatCompletionsBody({ model: "route", input: [{ type: "custom_tool_call_output", call_id: "x", output: [{ type: "output_audio", text: "x" }] }] }), (error) => error.error.param === "input[0].output[0].type");
+  });
+
   it("does not let arbitrary role-bearing typed items bypass validation", () => {
     assert.throws(
       () => toChatCompletionsBody({ model: "route", input: [{ type: "unknown", role: "developer" }] }),
