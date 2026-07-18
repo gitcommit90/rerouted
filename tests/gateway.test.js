@@ -1043,10 +1043,11 @@ describe("format translation", () => {
       "claude-sonnet-5",
       false
     );
+    assert.deepEqual(claudeBody.thinking, { type: "adaptive" });
     assert.deepEqual(claudeBody.output_config, { effort: "auto" });
   });
 
-  it("Claude adaptive models receive output_config.effort", () => {
+  it("Claude adaptive models receive explicit thinking with output_config.effort", () => {
     const body = claude.toAnthropicBody(
       {
         messages: [{ role: "user", content: "hi" }],
@@ -1055,8 +1056,27 @@ describe("format translation", () => {
       "claude-sonnet-5",
       false
     );
+    assert.deepEqual(body.thinking, { type: "adaptive" });
     assert.deepEqual(body.output_config, { effort: "high" });
-    assert.equal(body.thinking, undefined);
+  });
+
+  it("Claude context-management clear thinking receives adaptive thinking", () => {
+    const body = claude.toAnthropicBody(
+      {
+        messages: [{ role: "user", content: "hi" }],
+        output_config: { effort: "high" },
+        context_management: {
+          edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+        },
+      },
+      "claude-opus-4-8",
+      false
+    );
+    assert.deepEqual(body.thinking, { type: "adaptive" });
+    assert.deepEqual(body.output_config, { effort: "high" });
+    assert.deepEqual(body.context_management, {
+      edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+    });
   });
 
   it("Claude Haiku falls back to token-budget thinking", () => {

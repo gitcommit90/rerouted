@@ -131,6 +131,7 @@ function applyClaudeEffort(target, source, model) {
   }
 
   if (!/haiku/i.test(String(model))) {
+    target.thinking = { type: "adaptive" };
     target.output_config = { effort: claudeAdaptiveEffort(intent.level) };
     return target;
   }
