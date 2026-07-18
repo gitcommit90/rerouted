@@ -70,6 +70,36 @@ describe("ChatGPT Responses tool translation", () => {
     assert.equal(typeof result.reasoningScope, "string");
   });
 
+  it("preserves captured additional_tools custom grammar and replays custom output", () => {
+    const additionalTools = [
+      { type: "custom", name: "exec", description: "Runs a shell command and returns its output.", format: { type: "grammar", syntax: "lark", definition: "start: command\ncommand: /(.|\\n)+/" } },
+      { type: "namespace", name: "container", description: "Container tools", tools: [{ type: "custom", name: "exec", format: { type: "grammar", syntax: "regex", definition: "(?s).+" } }] },
+    ];
+    const first = chatgpt.toResponsesBody({ messages: [{ role: "user", content: "List files" }], tools: additionalTools }, "gpt-5.6-sol", false);
+    assert.deepEqual(first.tools, additionalTools);
+    const second = chatgpt.toResponsesBody({ messages: [
+      { role: "assistant", content: null, tool_calls: [{ id: "call_exec", type: "custom", custom: { name: "exec", input: "ls" } }] },
+      { role: "tool", tool_call_id: "call_exec", content: "a.js", extra_content: { openai: { custom_tool_call_output: true } } },
+    ], tools: additionalTools }, "gpt-5.6-sol", false);
+    assert.deepEqual(second.input, [
+      { type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "ls" },
+      { type: "custom_tool_call_output", call_id: "call_exec", output: "a.js" },
+    ]);
+    assert.deepEqual(second.tools, additionalTools);
+  });
+
+  it("collects custom tool events without converting them to function calls", async () => {
+    const events = [
+      { type: "response.output_item.added", output_index: 1, item: { id: "ctc_1", type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "" } },
+      { type: "response.custom_tool_call_input.delta", item_id: "ctc_1", output_index: 1, delta: "pw" },
+      { type: "response.custom_tool_call_input.done", item_id: "ctc_1", output_index: 1, input: "pwd" },
+      { type: "response.output_item.done", output_index: 1, item: { id: "ctc_1", type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "pwd" } },
+      { type: "response.completed" },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`);
+    const result = await chatgpt.pipeResponsesSse(Readable.from(events), null, "gpt-5.6-sol", { collect: true });
+    assert.deepEqual(result.choices[0].message.tool_calls, [{ id: "call_exec", type: "custom", custom: { name: "exec", input: "pwd" } }]);
+  });
+
   it("preserves assistant tool calls and tool results in multi-turn input", () => {
     const payload = chatgpt.toResponsesBody(
       {

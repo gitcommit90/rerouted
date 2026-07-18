@@ -117,6 +117,17 @@ function validateInputItem(item, param) {
     if (!(typeof item.output === "string" || Array.isArray(item.output))) throw invalid("function_call_output requires string or array output", `${param}.output`);
     return;
   }
+  if (item.type === "custom_tool_call") {
+    if (typeof item.call_id !== "string" || !item.call_id) throw invalid("custom_tool_call requires call_id", `${param}.call_id`);
+    if (typeof item.name !== "string" || !item.name) throw invalid("custom_tool_call requires name", `${param}.name`);
+    if (typeof item.input !== "string") throw invalid("custom_tool_call input must be a string", `${param}.input`);
+    return;
+  }
+  if (item.type === "custom_tool_call_output") {
+    if (typeof item.call_id !== "string" || !item.call_id) throw invalid("custom_tool_call_output requires call_id", `${param}.call_id`);
+    if (typeof item.output !== "string") throw invalid("custom_tool_call_output output must be a string", `${param}.output`);
+    return;
+  }
   if (item.type !== undefined && item.type !== "message") throw invalid("Unsupported input item", `${param}.type`);
   if (!["user", "assistant", "system", "developer"].includes(item.role)) throw invalid("Invalid message role", `${param}.role`);
   if (item.content == null) {
@@ -142,15 +153,18 @@ function inputMessages(input) {
       if (reasoning) pendingReasoning.push(reasoning);
       continue;
     }
-    if (item.type === "function_call") {
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
       if (!pendingAssistant) {
         pendingAssistant = { role: "assistant", content: null, tool_calls: [] };
         messages.push(pendingAssistant);
       }
+      const custom = item.type === "custom_tool_call";
       const call = {
         id: item.call_id,
-        type: "function",
-        function: { name: item.name, arguments: item.arguments },
+        type: custom ? "custom" : "function",
+        ...(custom
+          ? { custom: { name: item.name, input: item.input } }
+          : { function: { name: item.name, arguments: item.arguments } }),
       };
       if (pendingReasoning.length) {
         call.extra_content = { openai: { reasoning_items: pendingReasoning.map((reasoning) => ({ ...reasoning })) } };
@@ -160,8 +174,13 @@ function inputMessages(input) {
     }
     pendingAssistant = null;
     pendingReasoning = [];
-    if (item.type === "function_call_output") {
-      messages.push({ role: "tool", tool_call_id: item.call_id, content: textContent(item.output) });
+    if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+      messages.push({
+        role: "tool",
+        tool_call_id: item.call_id,
+        content: textContent(item.output),
+        ...(item.type === "custom_tool_call_output" ? { extra_content: { openai: { custom_tool_call_output: true } } } : {}),
+      });
       continue;
     }
     messages.push({
@@ -275,7 +294,10 @@ function outputFromMessage(message, responseId, request) {
       }
     }
     const callId = call.id || `call_${crypto.randomUUID().replaceAll("-", "")}`;
-    output.push({ id: `fc_${responseId.slice(5)}_${index}`, type: "function_call", status: "completed", call_id: callId, name: call.function?.name, arguments: call.function?.arguments || "" });
+    const custom = call.type === "custom" && call.custom;
+    output.push(custom
+      ? { id: `ctc_${responseId.slice(5)}_${index}`, type: "custom_tool_call", status: "completed", call_id: callId, name: call.custom.name, input: call.custom.input || "" }
+      : { id: `fc_${responseId.slice(5)}_${index}`, type: "function_call", status: "completed", call_id: callId, name: call.function?.name, arguments: call.function?.arguments || "" });
   }
   return output;
 }
@@ -351,17 +373,26 @@ async function pipeChatCompletionsSseToResponses(streamPipe, sink, model, reques
         if (!call) {
           const outputIndex = slot();
           const callId = callDelta.id || `call_${crypto.randomUUID().replaceAll("-", "")}`;
-          call = { id: `fc_${responseId.slice(5)}_${calls.size}`, call_id: callId, type: "function_call", status: "in_progress", name: callDelta.function?.name || "", arguments: "", argumentDeltas: [], outputIndex, emitted: false };
+          const custom = callDelta.type === "custom" || !!callDelta.custom;
+          call = { id: `${custom ? "ctc" : "fc"}_${responseId.slice(5)}_${calls.size}`, call_id: callId, type: custom ? "custom_tool_call" : "function_call", status: "in_progress", name: custom ? callDelta.custom?.name || "" : callDelta.function?.name || "", input: "", arguments: "", argumentDeltas: [], outputIndex, emitted: false };
           calls.set(key, call);
           entries.push(call);
           if (!deferForReasoning) {
-            const pending = { id: call.id, type: "function_call", status: "in_progress", call_id: call.call_id, name: call.name, arguments: "" };
+            const pending = call.type === "custom_tool_call"
+              ? { id: call.id, type: call.type, status: "in_progress", call_id: call.call_id, name: call.name, input: "" }
+              : { id: call.id, type: call.type, status: "in_progress", call_id: call.call_id, name: call.name, arguments: "" };
             writeEvent(sink, "response.output_item.added", { output_index: outputIndex, item: pending }, sequence++);
             call.emitted = true;
           }
         }
         if (callDelta.id) call.call_id = callDelta.id;
         if (callDelta.function?.name) call.name = callDelta.function.name;
+        if (callDelta.custom?.name) call.name = callDelta.custom.name;
+        if (callDelta.custom?.input) {
+          call.input += callDelta.custom.input;
+          call.argumentDeltas.push(callDelta.custom.input);
+          if (call.emitted) writeEvent(sink, "response.custom_tool_call_input.delta", { item_id: call.id, output_index: call.outputIndex, delta: callDelta.custom.input }, sequence++);
+        }
         if (callDelta.function?.arguments) {
           call.arguments += callDelta.function.arguments;
           call.argumentDeltas.push(callDelta.function.arguments);
@@ -406,13 +437,21 @@ async function pipeChatCompletionsSseToResponses(streamPipe, sink, model, reques
         writeEvent(sink, "response.output_item.done", { output_index: outputIndex, item }, sequence++);
       } else {
         if (!entry.emitted) {
-          const pending = { id: entry.id, type: "function_call", status: "in_progress", call_id: entry.call_id, name: entry.name, arguments: "" };
+          const custom = entry.type === "custom_tool_call";
+          const pending = custom
+            ? { id: entry.id, type: entry.type, status: "in_progress", call_id: entry.call_id, name: entry.name, input: "" }
+            : { id: entry.id, type: entry.type, status: "in_progress", call_id: entry.call_id, name: entry.name, arguments: "" };
           writeEvent(sink, "response.output_item.added", { output_index: outputIndex, item: pending }, sequence++);
-          for (const delta of entry.argumentDeltas) writeEvent(sink, "response.function_call_arguments.delta", { item_id: entry.id, output_index: outputIndex, delta }, sequence++);
+          for (const delta of entry.argumentDeltas) writeEvent(sink, custom ? "response.custom_tool_call_input.delta" : "response.function_call_arguments.delta", { item_id: entry.id, output_index: outputIndex, delta }, sequence++);
         }
-        const item = { id: entry.id, type: "function_call", status: "completed", call_id: entry.call_id, name: entry.name, arguments: entry.arguments };
+        const custom = entry.type === "custom_tool_call";
+        const item = custom
+          ? { id: entry.id, type: entry.type, status: "completed", call_id: entry.call_id, name: entry.name, input: entry.input }
+          : { id: entry.id, type: entry.type, status: "completed", call_id: entry.call_id, name: entry.name, arguments: entry.arguments };
         output.push(item);
-        writeEvent(sink, "response.function_call_arguments.done", { item_id: item.id, output_index: outputIndex, arguments: item.arguments }, sequence++);
+        writeEvent(sink, custom ? "response.custom_tool_call_input.done" : "response.function_call_arguments.done", custom
+          ? { item_id: item.id, output_index: outputIndex, input: item.input }
+          : { item_id: item.id, output_index: outputIndex, arguments: item.arguments }, sequence++);
         writeEvent(sink, "response.output_item.done", { output_index: outputIndex, item }, sequence++);
       }
     }

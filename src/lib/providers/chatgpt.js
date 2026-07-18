@@ -139,7 +139,7 @@ function toResponsesInput(messages, model, reasoningScope) {
     }
     if (message.role === "tool") {
       input.push({
-        type: "function_call_output",
+        type: message.extra_content?.openai?.custom_tool_call_output ? "custom_tool_call_output" : "function_call_output",
         call_id: message.tool_call_id,
         output: textFromOpenAiContent(message.content),
       });
@@ -167,7 +167,8 @@ function toResponsesInput(messages, model, reasoningScope) {
     }
     const emittedReasoning = new Set();
     for (const call of calls) {
-      if (!call?.function?.name) continue;
+      const custom = call?.type === "custom" && call.custom?.name;
+      if (!custom && !call?.function?.name) continue;
       const echoedReasoning = reasoningItemsFromToolCall(call);
       const reasoningItems = echoedReasoning.length
         ? echoedReasoning
@@ -178,7 +179,12 @@ function toResponsesInput(messages, model, reasoningScope) {
         emittedReasoning.add(identity);
         input.push(reasoning);
       }
-      input.push({
+      input.push(custom ? {
+        type: "custom_tool_call",
+        call_id: call.id,
+        name: call.custom.name,
+        input: typeof call.custom.input === "string" ? call.custom.input : String(call.custom.input ?? ""),
+      } : {
         type: "function_call",
         call_id: call.id,
         name: call.function.name,
@@ -264,11 +270,14 @@ function fromResponsesJson(data, model, { reasoningScope } = {}) {
       for (const c of item.content) {
         if (c.type === "output_text" || c.type === "text") text += c.text || "";
       }
-    } else if (item.type === "function_call" && item.name) {
+    } else if ((item.type === "function_call" || item.type === "custom_tool_call") && item.name) {
+      const custom = item.type === "custom_tool_call";
       const call = {
         id: item.call_id || item.id,
-        type: "function",
-        function: { name: item.name, arguments: item.arguments || "" },
+        type: custom ? "custom" : "function",
+        ...(custom
+          ? { custom: { name: item.name, input: item.input || "" } }
+          : { function: { name: item.name, arguments: item.arguments || "" } }),
       };
       attachReasoningItems(call, reasoningByCall.get(call.id) || []);
       toolCalls.push(call);
@@ -434,33 +443,55 @@ async function pipeResponsesSse(
       }
       if (
         (type === "response.output_item.added" || type === "response.output_item.done") &&
-        item?.type === "function_call" &&
+        (item?.type === "function_call" || item?.type === "custom_tool_call") &&
         item.name
       ) {
         const index = toolIndexFor(data, item);
         const current = toolCalls[index];
+        const custom = item.type === "custom_tool_call";
         current.id ||= item.call_id || item.id;
-        current.function.name ||= item.name;
-        if (!current.function.arguments && item.arguments) {
-          current.function.arguments = item.arguments;
+        if (custom) {
+          current.type = "custom";
+          current.custom = { name: item.name, input: item.input || current.custom?.input || "" };
+          delete current.function;
+        } else {
+          current.function.name ||= item.name;
+          if (!current.function.arguments && item.arguments) current.function.arguments = item.arguments;
         }
         if (type === "response.output_item.added") {
           ensureRole();
-          writeChunk(
-            openaiChunk({
-              id,
-              model,
-              tool_calls: [
-                {
-                  index,
-                  id: current.id,
-                  type: "function",
-                  function: { name: current.function.name, arguments: "" },
-                },
-              ],
-            })
-          );
+          writeChunk(openaiChunk({
+            id,
+            model,
+            tool_calls: [{
+              index,
+              id: current.id,
+              type: custom ? "custom" : "function",
+              ...(custom
+                ? { custom: { name: current.custom.name, input: "" } }
+                : { function: { name: current.function.name, arguments: "" } }),
+            }],
+          }));
         }
+      } else if (type === "response.custom_tool_call_input.delta") {
+        const index = toolIndexFor(data, item);
+        const delta = typeof data.delta === "string" ? data.delta : "";
+        const current = toolCalls[index];
+        current.type = "custom";
+        current.custom ||= { name: "", input: "" };
+        current.custom.input += delta;
+        delete current.function;
+        if (delta) {
+          ensureRole();
+          writeChunk(openaiChunk({ id, model, tool_calls: [{ index, type: "custom", custom: { input: delta } }] }));
+        }
+      } else if (type === "response.custom_tool_call_input.done") {
+        const index = toolIndexFor(data, item);
+        const current = toolCalls[index];
+        current.type = "custom";
+        current.custom ||= { name: "", input: "" };
+        if (!current.custom.input && typeof data.input === "string") current.custom.input = data.input;
+        delete current.function;
       } else if (type === "response.function_call_arguments.delta") {
         const index = toolIndexFor(data, item);
         const delta = typeof data.delta === "string" ? data.delta : "";
