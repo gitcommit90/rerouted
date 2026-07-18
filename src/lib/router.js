@@ -640,17 +640,7 @@ async function inspectEarlyResponsesSse(response, maxBytes = PREOUTPUT_INSPECTIO
     }
     // Metadata events such as response.created can precede a quota error.
     // Hold the stream until actual output (or completion) proves the account usable.
-    if (bytes >= maxBytes) {
-      await reader.cancel().catch(() => {});
-      return {
-        response: null,
-        failure: {
-          status: 502,
-          error: `Upstream exceeded the ${maxBytes}-byte inspection budget before producing a usable response`,
-          resetAt: null,
-        },
-      };
-    }
+    if (bytes >= maxBytes) break;
   }
 
   if (done) {
