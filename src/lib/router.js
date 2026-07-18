@@ -225,6 +225,11 @@ function classifyFailure(status, errorText) {
     status === 429 ||
     /rate[ _-]?limit|too many requests|quota|usage[ _-]?limit|resource[ _-]?exhaust|capacity|overload/.test(text);
   if (quota) return { eligible: true, kind: "quota", defaultCooldownMs: COOLDOWN_MS.quota };
+  const request =
+    /context[ _-]?window|context[ _-]?length[ _-]?exceed|maximum[ _-]?context[ _-]?length|input.{0,80}(?:too[ _-]?long|too[ _-]?large|exceed.{0,40}(?:context|token))|request[ _-]?too[ _-]?large/.test(
+      text
+    );
+  if (request) return { eligible: false, kind: "request", defaultCooldownMs: 0 };
   const capability =
     (status === 400 || status === 404 || status === 422) &&
     (/(?:unsupported|invalid|unknown)[ _-]?model|model[ _-]?(?:not[ _-]?found|unsupported|unavailable)/.test(
@@ -322,13 +327,19 @@ function parseEarlyResponsesFailure(text, response) {
       /usage[ _-]?limit|rate[ _-]?limit|quota|resource[ _-]?exhaust|insufficient[ _-]?quota/i.test(
         signature
       );
+    const request =
+      /context[ _-]?window|context[ _-]?length[ _-]?exceed|maximum[ _-]?context[ _-]?length|input.{0,80}(?:too[ _-]?long|too[ _-]?large|exceed.{0,40}(?:context|token))|request[ _-]?too[ _-]?large/i.test(
+        signature
+      );
     const reportedStatus = Number(error?.status ?? data?.status);
     const status =
       Number.isInteger(reportedStatus) && reportedStatus >= 400 && reportedStatus <= 599
         ? reportedStatus
         : quota
           ? 429
-          : 502;
+          : request
+            ? 400
+            : 502;
     const message =
       error?.message || data?.message || error?.code || error?.type || "Upstream stream failed";
     return {

@@ -126,10 +126,79 @@ describe("provider failure classification", () => {
       kind: "request",
       defaultCooldownMs: 0,
     });
+    assert.deepEqual(
+      classifyFailure(
+        502,
+        "Your input exceeds the context window of this model. Please adjust your input and try again."
+      ),
+      { eligible: false, kind: "request", defaultCooldownMs: 0 }
+    );
   });
 });
 
 describe("same-provider OAuth account fallback", () => {
+  it("does not turn context failures into cooldowns or a terminal 429", async () => {
+    const store = createStore(tmpConfig());
+    const quotaLock = {
+      until: Date.now() + 60 * 60_000,
+      status: 429,
+      kind: "quota",
+      reason: "usage limit reached",
+    };
+    store.seed({
+      providers: [
+        chatgptAccount("prov_a", "token-a", 100),
+        chatgptAccount("prov_b", "token-b", 200),
+        chatgptAccount("prov_c", "token-c", 300, { modelLocks: { "*": quotaLock } }),
+      ],
+    });
+    const calls = [];
+    const logger = captureLogger();
+    const router = createRouter({
+      store,
+      logger,
+      fetchImpl: async (_url, options) => {
+        calls.push(authToken(options));
+        return new Response(
+          [
+            "event: response.failed",
+            `data: ${JSON.stringify({
+              type: "response.failed",
+              response: {
+                error: {
+                  message:
+                    "Your input exceeds the context window of this model. Please adjust your input and try again.",
+                },
+              },
+            })}`,
+            "",
+          ].join("\n"),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        );
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "chatgpt/gpt-5.4",
+        messages: [{ role: "user", content: "oversized request" }],
+        stream: true,
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 400);
+    assert.deepEqual(calls, ["token-a", "token-b"]);
+    assert.match(result.error.error.message, /ChatGPT \(oauth1\) \[400\]/);
+    assert.match(result.error.error.message, /ChatGPT \(oauth2\) \[400\]/);
+    assert.match(result.error.error.message, /ChatGPT \(oauth3\) \[429\]/);
+    const providers = store.load().providers;
+    assert.equal(providers.find((provider) => provider.id === "prov_a").modelLocks?.["gpt-5.4"], undefined);
+    assert.equal(providers.find((provider) => provider.id === "prov_b").modelLocks?.["gpt-5.4"], undefined);
+    assert.deepEqual(providers.find((provider) => provider.id === "prov_c").modelLocks?.["*"], quotaLock);
+    assert.equal(logger.entries.find((entry) => entry.meta?.event === "accounts_exhausted").meta.status, 400);
+  });
+
   it("assigns monotonic oauth aliases and advertises only shared model ids", () => {
     const configPath = tmpConfig();
     const store = createStore(configPath);
