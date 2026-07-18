@@ -199,6 +199,42 @@ describe("same-provider OAuth account fallback", () => {
     assert.equal(logger.entries.find((entry) => entry.meta?.event === "accounts_exhausted").meta.status, 400);
   });
 
+  it("does not lock accounts when a context failure is thrown while preparing a stream", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({
+      providers: [
+        chatgptAccount("prov_a", "token-a", 100),
+        chatgptAccount("prov_b", "token-b", 200),
+      ],
+    });
+    const calls = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (_url, options) => {
+        calls.push(authToken(options));
+        throw new Error(
+          "Your input exceeds the context window of this model. Please adjust your input and try again."
+        );
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "chatgpt/gpt-5.4",
+        messages: [{ role: "user", content: "oversized request" }],
+        stream: true,
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 400);
+    assert.deepEqual(calls, ["token-a", "token-b"]);
+    for (const provider of store.load().providers) {
+      assert.equal(provider.modelLocks?.["gpt-5.4"], undefined);
+    }
+  });
+
   it("assigns monotonic oauth aliases and advertises only shared model ids", () => {
     const configPath = tmpConfig();
     const store = createStore(configPath);

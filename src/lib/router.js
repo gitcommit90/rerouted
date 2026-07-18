@@ -1110,13 +1110,15 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
           defaultCooldownMs: COOLDOWN_MS.transient,
         };
       }
+      const error = e.message || String(e);
+      const classification = classifyFailure(502, error);
       return {
         ok: false,
-        status: 502,
-        error: e.message || String(e),
-        cooldownEligible: true,
-        failureKind: "transient",
-        defaultCooldownMs: COOLDOWN_MS.transient,
+        status: classification.kind === "request" ? 400 : 502,
+        error,
+        cooldownEligible: classification.eligible,
+        failureKind: classification.kind,
+        defaultCooldownMs: classification.defaultCooldownMs,
       };
     } finally {
       if (!cleanupDeferred) bound.cleanup();
