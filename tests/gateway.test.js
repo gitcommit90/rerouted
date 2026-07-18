@@ -1801,6 +1801,7 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
       cached_tokens: 2,
       total_tokens: 11,
     });
+    assert.doesNotMatch(joined, /extra_content/);
   });
 
   it("pipeResponsesSse collect builds chat completion", async () => {

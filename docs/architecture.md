@@ -13,9 +13,9 @@ ReRouted is one Electron process with three jobs:
 There is no separate daemon. Closing or hiding the panel does not stop the gateway; quitting ReRouted does.
 
 ```text
-OpenAI-style chat-completions client
+OpenAI-style or Anthropic Messages client
         |
-        | Bearer rr-... + /v1/chat/completions
+        | rr-... + /v1/chat/completions, /v1/responses, or /v1/messages
         v
 src/lib/gateway.js
         |
@@ -29,7 +29,7 @@ src/lib/providers/*  --->  upstream provider API
         |
         | normalize response/SSE
         v
-OpenAI-style chat-completions response
+Response in the client's original API shape
 ```
 
 ## Main process and panel
@@ -51,10 +51,14 @@ The renderer is vanilla HTML, CSS, and JavaScript. It renders onboarding and the
 | `GET /v1/models` | Bearer key | Enabled provider models plus named route IDs |
 | `POST /v1/chat/completions` | Bearer key | Streaming or non-streaming routed chat completion |
 | `POST /v1/responses` | Bearer key | Responses requests adapted through the chat-completions router |
+| `POST /v1/messages` | Bearer key or `x-api-key` | Anthropic Messages requests adapted through the chat-completions router |
+| `POST /v1/messages/count_tokens` | Bearer key or `x-api-key` | Local best-effort input-token estimate without an upstream request |
 
 The default bind is `127.0.0.1:4949`. Settings can switch the host to `0.0.0.0` for LAN or Tailscale access. CORS is currently `*`, so the bearer key is the gateway's access boundary when network binding is enabled.
 
 JSON request bodies are limited to 32 MiB. Oversized requests receive a JSON `413` response before routing begins.
+
+Anthropic Messages requests are normalized into the same internal OpenAI chat-completions shape used by the router, so account pools, named routes, retries, fallback, round robin, activity, and usage all follow the existing path. Responses are converted back to Anthropic JSON or SSE, including text, tool use, tool results, stop reasons, and token usage. Native Claude thinking, signatures, cache-control blocks, and stop sequences are preserved in memory when a Messages request routes back to Claude, while the private metadata is not serialized to non-Claude providers. Both `/v1/messages` and the duplicate-prefix `/v1/v1/messages` form are accepted for compatibility with Claude Code versions and base-URL conventions that each add `/v1`.
 
 ## Model IDs and routes
 

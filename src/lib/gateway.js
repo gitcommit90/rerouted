@@ -9,13 +9,21 @@ const {
   pipeChatCompletionsSseToResponses,
   toResponsesError,
 } = require("./responses-api");
+const {
+  toChatCompletionsBody: toAnthropicChatCompletionsBody,
+  fromChatCompletion: fromChatCompletionToAnthropic,
+  pipeChatCompletionsSseToAnthropic,
+  toAnthropicError,
+  estimateInputTokens,
+} = require("./anthropic-api");
 
 const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
 
 /**
  * OpenAI-compatible HTTP gateway.
  * Auth: Authorization: Bearer <apiKey>
- * Routes: GET /v1/models, POST /v1/chat/completions, POST /v1/responses, GET /health
+ * Routes: GET /v1/models, POST /v1/chat/completions, POST /v1/responses,
+ * POST /v1/messages, POST /v1/messages/count_tokens, GET /health
  */
 function createGateway({
   store,
@@ -29,17 +37,20 @@ function createGateway({
   let listeningPort = null;
   let listeningHost = null;
 
-  function unauthorized(res) {
+  function unauthorized(res, anthropic = false) {
     res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        error: {
-          message: "Invalid API key",
-          type: "invalid_request_error",
-          code: "invalid_api_key",
-        },
-      })
-    );
+    res.end(JSON.stringify(anthropic
+      ? {
+          type: "error",
+          error: { message: "Invalid API key", type: "authentication_error" },
+        }
+      : {
+          error: {
+            message: "Invalid API key",
+            type: "invalid_request_error",
+            code: "invalid_api_key",
+          },
+        }));
   }
 
   /** Accept any enabled gateway API key (multi-key). */
@@ -60,8 +71,8 @@ function createGateway({
     const cfg = store.load();
     const hdr = req.headers.authorization || req.headers.Authorization || "";
     const m = String(hdr).match(/^Bearer\s+(.+)$/i);
-    if (!m) return false;
-    return validKeys(cfg).has(m[1].trim());
+    const supplied = m?.[1] || req.headers["x-api-key"] || req.headers["X-Api-Key"];
+    return !!supplied && validKeys(cfg).has(String(supplied).trim());
   }
 
   function readBody(req) {
@@ -112,11 +123,15 @@ function createGateway({
 
   async function handle(req, res) {
     const url = new URL(req.url || "/", `http://${host}`);
-    const path = url.pathname;
+    const path = url.pathname.replace(/^\/v1\/v1(?=\/|$)/, "/v1");
+    const anthropicPath = path === "/v1/messages" || path === "/v1/messages/count_tokens";
 
     // CORS for local tools
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Authorization, Content-Type, X-Api-Key, Anthropic-Version, Anthropic-Beta"
+    );
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -143,18 +158,18 @@ function createGateway({
     }
 
     if (!checkAuth(req)) {
-      unauthorized(res);
+      unauthorized(res, anthropicPath);
       return;
     }
 
     const cfg = store.load();
     if (cfg.serverEnabled === false) {
       res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: { message: "Server disabled", type: "api_error", code: "server_disabled" },
-        })
-      );
+      res.end(JSON.stringify(anthropicPath
+        ? toAnthropicError({ message: "Server disabled", type: "api_error" })
+        : {
+            error: { message: "Server disabled", type: "api_error", code: "server_disabled" },
+          }));
       return;
     }
 
@@ -166,9 +181,37 @@ function createGateway({
         return;
       }
 
-      if (req.method === "POST" && (path === "/v1/chat/completions" || path === "/v1/responses")) {
+      if (req.method === "POST" && path === "/v1/messages/count_tokens") {
+        let body;
+        try {
+          body = await readBody(req);
+        } catch (error) {
+          const tooLarge = error?.code === "REQUEST_BODY_TOO_LARGE";
+          res.writeHead(tooLarge ? 413 : 400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(toAnthropicError({
+            type: "invalid_request_error",
+            message: tooLarge
+              ? `Request body exceeds the ${Math.floor(maxBodyBytes / (1024 * 1024))} MiB limit`
+              : "Invalid JSON body",
+          })));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ input_tokens: estimateInputTokens(body) }));
+        return;
+      }
+
+      if (
+        req.method === "POST" &&
+        ["/v1/chat/completions", "/v1/responses", "/v1/messages"].includes(path)
+      ) {
         const responsesRequest = path === "/v1/responses";
-        const routeName = responsesRequest ? "responses" : "chat/completions";
+        const anthropicRequest = path === "/v1/messages";
+        const routeName = responsesRequest
+          ? "responses"
+          : anthropicRequest
+            ? "messages"
+            : "chat/completions";
         let body;
         try {
           body = await readBody(req);
@@ -176,44 +219,51 @@ function createGateway({
           if (error?.code === "REQUEST_BODY_TOO_LARGE") {
             logger.warn(`${routeName}: request body too large`);
             res.writeHead(413, { "Content-Type": "application/json" });
-            res.end(
-              JSON.stringify({
-                error: {
-                  message: `Request body exceeds the ${Math.floor(maxBodyBytes / (1024 * 1024))} MiB limit`,
-                  type: "invalid_request_error",
-                  code: "request_body_too_large",
-                },
-              })
-            );
+            const message = `Request body exceeds the ${Math.floor(maxBodyBytes / (1024 * 1024))} MiB limit`;
+            res.end(JSON.stringify(anthropicRequest
+              ? toAnthropicError({ type: "invalid_request_error", message })
+              : {
+                  error: {
+                    message,
+                    type: "invalid_request_error",
+                    code: "request_body_too_large",
+                  },
+                }));
             return;
           }
           logger.warn(`${routeName}: invalid JSON body`);
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: { message: "Invalid JSON body", type: "invalid_request_error" },
-            })
-          );
+          res.end(JSON.stringify(anthropicRequest
+            ? toAnthropicError({ type: "invalid_request_error", message: "Invalid JSON body" })
+            : {
+                error: { message: "Invalid JSON body", type: "invalid_request_error" },
+              }));
           return;
         }
         if (!body.model) {
           logger.warn(`${routeName}: missing model`);
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: { message: "model is required", type: "invalid_request_error" },
-            })
-          );
+          res.end(JSON.stringify(anthropicRequest
+            ? toAnthropicError({ type: "invalid_request_error", message: "model is required" })
+            : {
+                error: { message: "model is required", type: "invalid_request_error" },
+              }));
           return;
         }
 
         let routerBody;
         try {
-          routerBody = responsesRequest ? toChatCompletionsBody(body) : body;
+          routerBody = responsesRequest
+            ? toChatCompletionsBody(body)
+            : anthropicRequest
+              ? toAnthropicChatCompletionsBody(body)
+              : body;
         } catch (error) {
           logger.warn(`${routeName}: invalid request`, { error: error.message });
           res.writeHead(error.status || 400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(toResponsesError(error)));
+          res.end(JSON.stringify(anthropicRequest
+            ? toAnthropicError(error.error || error)
+            : toResponsesError(error)));
           return;
         }
         logger.info(`${routeName} request`, {
@@ -247,7 +297,13 @@ function createGateway({
               error: result.error?.error?.message || result.error,
             });
             res.writeHead(result.status || 502, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(responsesRequest ? toResponsesError(result.error) : result.error));
+            res.end(JSON.stringify(
+              responsesRequest
+                ? toResponsesError(result.error)
+                : anthropicRequest
+                  ? toAnthropicError(result.error, "Request failed", result.status)
+                  : result.error
+            ));
             return;
           }
           logger.info(`${routeName} ok`, {
@@ -266,6 +322,8 @@ function createGateway({
             try {
               if (responsesRequest) {
                 await pipeChatCompletionsSseToResponses(result.streamPipe, res, body.model, body);
+              } else if (anthropicRequest) {
+                await pipeChatCompletionsSseToAnthropic(result.streamPipe, res, body.model);
               } else {
                 await result.streamPipe(res);
               }
@@ -275,7 +333,7 @@ function createGateway({
               activityStatus = clientAbort.signal.aborted ? 499 : 502;
               activityOutcome = clientAbort.signal.aborted ? "canceled" : "error";
               if (!res.writableEnded) {
-                 if (!responsesRequest) {
+                 if (!responsesRequest && !anthropicRequest) {
                    res.write(
                      `data: ${JSON.stringify({ error: { message: e.message } })}\n\n`
                    );
@@ -288,9 +346,11 @@ function createGateway({
 
            res.writeHead(200, { "Content-Type": "application/json" });
            res.end(
-             JSON.stringify(
-               responsesRequest
+              JSON.stringify(
+                responsesRequest
                   ? fromChatCompletion(result.openAiJson, body.model, body)
+                  : anthropicRequest
+                    ? fromChatCompletionToAnthropic(result.openAiJson, body.model)
                  : result.openAiJson
              )
            );
@@ -308,14 +368,16 @@ function createGateway({
       }
 
       res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: { message: "Not found", type: "invalid_request_error" } }));
+      res.end(JSON.stringify(anthropicPath
+        ? toAnthropicError({ message: "Not found", type: "not_found_error" })
+        : { error: { message: "Not found", type: "invalid_request_error" } }));
     } catch (e) {
       res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: { message: e.message || "Internal error", type: "api_error" },
-        })
-      );
+      res.end(JSON.stringify(anthropicPath
+        ? toAnthropicError({ message: e.message || "Internal error", type: "api_error" })
+        : {
+            error: { message: e.message || "Internal error", type: "api_error" },
+          }));
     }
   }
 

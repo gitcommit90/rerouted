@@ -73,6 +73,50 @@ describe("live request activity", () => {
     }
   });
 
+  it("tracks Anthropic Messages requests through the same activity lifecycle", async () => {
+    const activity = createRequestActivity({ idFactory: () => "request-messages" });
+    const events = [];
+    activity.subscribe((event) => events.push(event));
+    const gateway = createGateway({
+      store: { load: () => ({ apiKey: "rr-test", serverEnabled: true }) },
+      router: {
+        chatCompletions: async ({ body, onProviderSelected }) => {
+          assert.equal(body.model, "coding");
+          assert.equal(body.messages[0].content, "hello");
+          onProviderSelected({ providerId: "provider-messages", providerType: "claude" });
+          return {
+            ok: true,
+            stream: false,
+            openAiJson: {
+              choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+            },
+          };
+        },
+      },
+      requestActivity: activity,
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    const port = await listen(server);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": "rr-test", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "coding",
+          max_tokens: 8,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).content[0].text, "ok");
+      assert.deepEqual(events.map((event) => event.type), ["started", "routed", "finished"]);
+      assert.equal(events[1].request.providerId, "provider-messages");
+      assert.deepEqual(activity.snapshot(), []);
+    } finally {
+      await close(server);
+    }
+  });
+
   it("clears failed requests so the status visualization cannot get stuck", async () => {
     const activity = createRequestActivity({ idFactory: () => "request-failed" });
     const events = [];

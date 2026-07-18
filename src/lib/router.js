@@ -16,6 +16,7 @@ const appLogger = require("./logger");
 const { canonicalProviderType, isOAuthProvider, getActiveModelLock } = require("./store");
 const { publicComboId, comboMatchesId } = require("./combos");
 const { createSseParser } = require("./sse");
+const ANTHROPIC_METADATA = Symbol.for("rerouted.anthropic.metadata");
 
 const COOLDOWN_MS = {
   quota: 60_000,
@@ -770,7 +771,8 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
                 return await claude.pipeAnthropicSseToOpenAi(
                   res.body,
                   clientRes,
-                  upstreamModel
+                  upstreamModel,
+                  { preserveAnthropic: !!body[ANTHROPIC_METADATA] }
                 );
               } else if (
                 meta.translate === "responses" ||

@@ -4,7 +4,7 @@
   <p><strong>Stop rewiring your AI tools every time an account hits quota.</strong></p>
   <p>
     A macOS menu-bar router that puts your connected accounts, models,
-    API keys, and fallback routes behind one local chat-completions endpoint.
+    API keys, and fallback routes behind one local endpoint.
   </p>
   <p>
     <a href="https://rerouted.dev">Website</a> |
@@ -31,7 +31,7 @@
 
 Your editor should not need to know which account still has quota, which provider is having a bad morning, or which model you want to try next.
 
-ReRouted gives compatible chat-completions clients the same local contract:
+ReRouted gives compatible OpenAI and Anthropic clients the same local contract:
 
 ```text
 Base URL   http://127.0.0.1:4949/v1
@@ -41,7 +41,7 @@ Model      coding
 
 `coding` is a route you own. Put your preferred model first, another account second, and a backup provider third. When an upstream rate-limits, times out, or returns a retryable failure before output begins, ReRouted advances through the route without changing the URL or model name your client uses.
 
-The promise is deliberately focused: ReRouted exposes model discovery and OpenAI-style chat completions. It is a routing layer, not a clone of every OpenAI API.
+The promise is deliberately focused: ReRouted exposes model discovery, OpenAI-style chat completions and Responses requests, plus Anthropic Messages compatibility for Claude Code and similar clients. It is a routing layer, not a clone of either platform API.
 
 ## Why ReRouted exists
 
@@ -60,7 +60,7 @@ No hosted control plane. No account with ReRouted. No Dock icon. The gateway and
 ```text
  editor / agent / script
           |
-          | POST /v1/chat/completions
+          | POST /v1/chat/completions or /v1/messages
           | model: "coding"
           v
   127.0.0.1:4949/v1
@@ -72,7 +72,7 @@ No hosted control plane. No account with ReRouted. No Dock icon. The gateway and
        3. backup provider
           |
           v
- normalized OpenAI-style response
+ response in the client's original API shape
 ```
 
 Routes support two strategies:
@@ -134,7 +134,23 @@ curl http://127.0.0.1:4949/v1/chat/completions \
   -d '{"model":"coding","messages":[{"role":"user","content":"Say hello in three words."}]}'
 ```
 
-Then enter the same base URL, gateway key, and route name in a configurable client that supports OpenAI-style chat completions. Setting names vary by client. Switch providers, accounts, models, and route order inside ReRouted; leave the client configuration alone.
+Then enter the same base URL, gateway key, and route name in a configurable OpenAI-style client. Setting names vary by client. Switch providers, accounts, models, and route order inside ReRouted; leave the client configuration alone.
+
+Claude Code uses the Anthropic Messages route. Point it at the gateway with its generated key and map each alias to a ReRouted model or named route:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4949/v1",
+    "ANTHROPIC_AUTH_TOKEN": "rr-your-generated-key",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "coding",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "coding",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "fast"
+  }
+}
+```
+
+ReRouted accepts both `/v1/messages` and `/v1/v1/messages`, so current Claude Code versions work whether they append `/messages` or `/v1/messages` to that base URL.
 
 ## The menu-bar control plane
 
@@ -161,8 +177,10 @@ The gateway continues running when the panel is hidden. Quitting ReRouted stops 
 | `GET /v1/models` | Enabled direct models and named routes |
 | `POST /v1/chat/completions` | Streaming or non-streaming routed chat completions |
 | `POST /v1/responses` | Streaming or non-streaming routed Responses API requests |
+| `POST /v1/messages` | Streaming or non-streaming Anthropic Messages requests |
+| `POST /v1/messages/count_tokens` | Local best-effort Anthropic input-token estimate |
 
-Requests require a generated bearer key except for `/` and `/health`. OpenAI-style image inputs inside chat-completion messages are supported when the selected upstream model accepts them. The separate `/v1/images` generation API, embeddings, audio, and the rest of the OpenAI platform API are outside ReRouted's scope.
+Requests require a generated gateway key except for `/` and `/health`. OpenAI routes accept `Authorization: Bearer`; Anthropic routes accept that header or `x-api-key`. OpenAI-style image inputs inside chat-completion messages and Anthropic image blocks are supported when the selected upstream model accepts them. The separate `/v1/images` generation API, embeddings, audio, Anthropic Batches, and the rest of both platform APIs are outside ReRouted's scope.
 
 ## Local-first, with the boundaries stated plainly
 
@@ -207,7 +225,7 @@ The implementation is intentionally small: Electron, Node's built-in HTTP server
 
 ## Current release
 
-ReRouted `0.4.7` accepts the standalone authorization code shown by xAI while preserving callback-state validation and PKCE binding. The xAI connection panel now presents the code field directly instead of hiding it under troubleshooting. Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, and chat completions; a published third-party client compatibility matrix is still forthcoming.
+Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, chat completions, Responses, and Anthropic Messages compatibility; a published third-party client compatibility matrix is still forthcoming.
 
 ## License
 
