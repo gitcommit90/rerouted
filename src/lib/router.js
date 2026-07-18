@@ -23,6 +23,7 @@ const COOLDOWN_MS = {
   auth: 2 * 60_000,
   transient: 30_000,
 };
+const PREOUTPUT_INSPECTION_BYTES = 64 * 1024;
 
 function createRequestLog(max = 50) {
   const items = [];
@@ -578,7 +579,7 @@ function rebuildResponseWithPrelude(response, chunks, reader) {
   });
 }
 
-async function inspectEarlyResponsesSse(response) {
+async function inspectEarlyResponsesSse(response, maxBytes = PREOUTPUT_INSPECTION_BYTES) {
   if (!response?.ok || !response.body?.getReader) return { response, failure: null };
   const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
   if (contentType && !contentType.includes("text/event-stream")) {
@@ -598,24 +599,55 @@ async function inspectEarlyResponsesSse(response) {
   const decoder = new TextDecoder();
   const chunks = [];
   let text = "";
+  let pendingEvents = "";
+  let bytes = 0;
   let done = false;
   while (true) {
     const next = await reader.read();
     done = next.done;
     if (done) break;
     chunks.push(next.value);
-    text += decoder.decode(next.value, { stream: true });
-    const failure = parseEarlyResponsesFailure(text, response);
-    if (failure) {
-      await reader.cancel().catch(() => {});
-      return { response: null, failure };
+    bytes += next.value?.byteLength || 0;
+    const decoded = decoder.decode(next.value, { stream: true });
+    text += decoded;
+    pendingEvents += decoded;
+
+    let completeEnd = 0;
+    const boundary = /\r?\n\r?\n/g;
+    for (let match = boundary.exec(pendingEvents); match; match = boundary.exec(pendingEvents)) {
+      completeEnd = boundary.lastIndex;
+    }
+    if (completeEnd) {
+      const completeEvents = pendingEvents.slice(0, completeEnd);
+      pendingEvents = pendingEvents.slice(completeEnd);
+      const failure = parseEarlyResponsesFailure(completeEvents, response);
+      if (failure) {
+        await reader.cancel().catch(() => {});
+        return { response: null, failure };
+      }
+      if (hasProductiveResponsesEvent(completeEvents)) break;
     }
     // Metadata events such as response.created can precede a quota error.
     // Hold the stream until actual output (or completion) proves the account usable.
-    if (hasProductiveResponsesEvent(text)) break;
+    if (bytes >= maxBytes) {
+      await reader.cancel().catch(() => {});
+      return {
+        response: null,
+        failure: {
+          status: 502,
+          error: `Upstream exceeded the ${maxBytes}-byte inspection budget before producing a usable response`,
+          resetAt: null,
+        },
+      };
+    }
   }
 
   if (done) {
+    const trailing = decoder.decode();
+    text += trailing;
+    pendingEvents += trailing;
+    const trailingFailure = parseEarlyResponsesFailure(pendingEvents, response);
+    if (trailingFailure) return { response: null, failure: trailingFailure };
     try {
       const payload = JSON.parse(text);
       if (isUsableChatCompletion(payload)) {
@@ -624,7 +656,7 @@ async function inspectEarlyResponsesSse(response) {
     } catch {
       /* the completed body may be SSE */
     }
-    if (!hasProductiveResponsesEvent(text)) {
+    if (!hasProductiveResponsesEvent(pendingEvents)) {
       return {
         response: null,
         failure: {
