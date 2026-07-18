@@ -1434,9 +1434,9 @@ describe("same-provider OAuth account fallback", () => {
     assert.deepEqual(calls, ["stream-1.test", "stream-2.test", "stream-3.test"]);
   });
 
-  it("bounds pre-output stream inspection and reroutes an oversized metadata preamble", async () => {
+  it("passes through an oversized metadata preamble without locking or rerouting", async () => {
     const store = createStore(tmpConfig());
-    const providers = ["Slow preamble", "Backup"].map((name, index) => ({
+    const providers = ["Large preamble", "Backup"].map((name, index) => ({
       id: `prov_bounded_${index + 1}`,
       type: "openai-compat",
       name,
@@ -1474,6 +1474,12 @@ describe("same-provider OAuth account fallback", () => {
                     `data: ${JSON.stringify({ type: "response.created", padding: "x".repeat(70 * 1024) })}\n\n`
                   )
                 );
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "large preamble success" })}\n\n`
+                  )
+                );
+                controller.close();
               },
               cancel() {
                 canceled = true;
@@ -1483,7 +1489,7 @@ describe("same-provider OAuth account fallback", () => {
           );
         }
         return new Response(
-          `data: ${JSON.stringify({ choices: [{ delta: { content: "bounded fallback" } }] })}\n\ndata: [DONE]\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "unexpected fallback" } }] })}\n\ndata: [DONE]\n\n`,
           { status: 200, headers: { "Content-Type": "text/event-stream" } }
         );
       },
@@ -1500,9 +1506,9 @@ describe("same-provider OAuth account fallback", () => {
     await result.streamPipe({ write: (chunk) => chunks.push(String(chunk)) });
 
     assert.equal(result.ok, true, JSON.stringify(result.error));
-    assert.equal(canceled, true);
-    assert.match(chunks.join(""), /bounded fallback/);
-    assert.deepEqual(calls, ["bounded-1.test", "bounded-2.test"]);
+    assert.equal(canceled, false);
+    assert.match(chunks.join(""), /large preamble success/);
+    assert.deepEqual(calls, ["bounded-1.test"]);
   });
 
   it("records streaming usage after the final SSE event instead of an early zero-token success", async () => {
