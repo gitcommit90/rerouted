@@ -906,7 +906,7 @@ describe("same-provider OAuth account fallback", () => {
     });
   });
 
-  it("does not claim account exhaustion after a non-fallback request error", async () => {
+  it("exhausts every OAuth account after generic request errors", async () => {
     const store = createStore(tmpConfig());
     store.seed({
       providers: [oauthAccount("prov_a", "token-a", 100), oauthAccount("prov_b", "token-b", 200)],
@@ -933,9 +933,9 @@ describe("same-provider OAuth account fallback", () => {
     });
 
     assert.equal(result.ok, false);
-    assert.deepEqual(calls, ["token-a"]);
-    assert.ok(logger.entries.some((entry) => entry.meta?.event === "route_failure_no_fallback"));
-    assert.ok(!logger.entries.some((entry) => entry.meta?.event === "accounts_exhausted"));
+    assert.deepEqual(calls, ["token-a", "token-b"]);
+    assert.equal(result.error.error.details.length, 2);
+    assert.ok(logger.entries.some((entry) => entry.meta?.event === "accounts_exhausted"));
   });
 
   it("does not persist OAuth account locks for keyed providers", async () => {
@@ -1125,21 +1125,12 @@ describe("same-provider OAuth account fallback", () => {
     assert.ok(logger.entries.some((entry) => entry.meta?.event === "account_fallback"));
   });
 
-  it("stops an explicit route on a non-retryable failure before later locks can replace it", async () => {
+  it("continues an explicit route after a generic 400 until a usable 2xx", async () => {
     const store = createStore(tmpConfig());
     store.seed({
       providers: [
         oauthAccount("prov_a", "token-a", 100),
-        oauthAccount("prov_b", "token-b", 200, {
-          modelLocks: {
-            "*": {
-              until: Date.now() + 5 * 60_000,
-              status: 429,
-              kind: "quota",
-              reason: "stale transport lock",
-            },
-          },
-        }),
+        oauthAccount("prov_b", "token-b", 200),
       ],
       combos: [
         {
@@ -1160,9 +1151,11 @@ describe("same-provider OAuth account fallback", () => {
       logger: captureLogger(),
       usage: { record: (entry) => usageRows.push(entry) },
       fetchImpl: async (_url, options) => {
-        calls.push(authToken(options));
+        const token = authToken(options);
+        calls.push(token);
+        if (token === "token-b") return successResponse("fallback worked");
         return new Response(JSON.stringify({ error: { message: "not-found" } }), {
-          status: 404,
+          status: 400,
           headers: { "Content-Type": "application/json" },
         });
       },
@@ -1176,16 +1169,200 @@ describe("same-provider OAuth account fallback", () => {
       },
     });
 
-    assert.equal(result.ok, false);
-    assert.equal(result.status, 404);
-    assert.deepEqual(calls, ["token-a"]);
-    assert.equal(result.error.error.details.length, 1);
-    assert.match(result.error.error.message, /xAI \(Grok\) \(oauth1\) \[404\]: not-found/);
-    assert.doesNotMatch(result.error.error.message, /locked|prov_/i);
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(result.openAiJson.choices[0].message.content, "fallback worked");
+    assert.deepEqual(calls, ["token-a", "token-b"]);
     assert.deepEqual(
       usageRows.map((row) => [row.providerType, row.providerName, row.accountAlias]),
-      [["xai", "xAI (Grok)", "oauth1"]]
+      [["xai", "prov_b", "oauth2"]]
     );
+  });
+
+  it("continues through a 429 and provider-specific 400 to the next route member", async () => {
+    const store = createStore(tmpConfig());
+    const providers = ["Claude", "NVIDIA NIM", "Backup"].map((name, index) => ({
+      id: `prov_${index + 1}`,
+      type: "openai-compat",
+      name,
+      baseUrl: `https://provider-${index + 1}.test/v1`,
+      apiKey: `key-${index + 1}`,
+      enabled: true,
+      models: [{ id: `model-${index + 1}`, name: `Model ${index + 1}`, enabled: true }],
+    }));
+    store.seed({
+      providers,
+      combos: [
+        {
+          id: "combo_opus",
+          name: "opus-route",
+          strategy: "fallback",
+          members: providers.map((provider, index) => ({
+            providerId: provider.id,
+            model: `model-${index + 1}`,
+          })),
+        },
+      ],
+    });
+    const calls = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (url) => {
+        calls.push(new URL(url).hostname);
+        if (url.includes("provider-1")) {
+          return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+            status: 429,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("provider-2")) {
+          return new Response(
+            "Failed to deserialize ChatCompletionRequestToolMessageContent",
+            { status: 400, headers: { "Content-Type": "text/plain" } }
+          );
+        }
+        return successResponse("third member worked");
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "opus-route",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+      },
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(result.openAiJson.choices[0].message.content, "third member worked");
+    assert.deepEqual(calls, ["provider-1.test", "provider-2.test", "provider-3.test"]);
+  });
+
+  it("reroutes a 2xx error payload and unusable 2xx body", async () => {
+    const store = createStore(tmpConfig());
+    const providers = ["Error payload", "Malformed", "Usable"].map((name, index) => ({
+      id: `prov_usable_${index + 1}`,
+      type: "openai-compat",
+      name,
+      baseUrl: `https://usable-${index + 1}.test/v1`,
+      apiKey: `usable-key-${index + 1}`,
+      enabled: true,
+      models: [{ id: `usable-model-${index + 1}`, name, enabled: true }],
+    }));
+    store.seed({
+      providers,
+      combos: [
+        {
+          id: "combo_usable",
+          strategy: "fallback",
+          members: providers.map((provider, index) => ({
+            providerId: provider.id,
+            model: `usable-model-${index + 1}`,
+          })),
+        },
+      ],
+    });
+    const calls = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (url) => {
+        calls.push(new URL(url).hostname);
+        if (url.includes("usable-1")) {
+          return new Response(JSON.stringify({ error: { message: "failed inside a 200" } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("usable-2")) {
+          return new Response("not-json", {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return successResponse("usable response");
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "combo_usable",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+      },
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(result.openAiJson.choices[0].message.content, "usable response");
+    assert.deepEqual(calls, ["usable-1.test", "usable-2.test", "usable-3.test"]);
+  });
+
+  it("reroutes immediate 2xx stream errors and empty streams before output starts", async () => {
+    const store = createStore(tmpConfig());
+    const providers = ["Stream error", "Empty stream", "Usable stream"].map((name, index) => ({
+      id: `prov_stream_${index + 1}`,
+      type: "openai-compat",
+      name,
+      baseUrl: `https://stream-${index + 1}.test/v1`,
+      apiKey: `stream-key-${index + 1}`,
+      enabled: true,
+      models: [{ id: `stream-model-${index + 1}`, name, enabled: true }],
+    }));
+    store.seed({
+      providers,
+      combos: [
+        {
+          id: "combo_stream_usable",
+          strategy: "fallback",
+          members: providers.map((provider, index) => ({
+            providerId: provider.id,
+            model: `stream-model-${index + 1}`,
+          })),
+        },
+      ],
+    });
+    const calls = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (url) => {
+        calls.push(new URL(url).hostname);
+        if (url.includes("stream-1")) {
+          return new Response(
+            `event: error\ndata: ${JSON.stringify({ type: "error", error: { message: "provider failed" } })}\n\n`,
+            { status: 200, headers: { "Content-Type": "text/event-stream" } }
+          );
+        }
+        if (url.includes("stream-2")) {
+          return new Response("data: [DONE]\n\n", {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+        }
+        return new Response(
+          [
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "usable stream" } }] })}`,
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        );
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "combo_stream_usable",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      },
+    });
+    const chunks = [];
+    await result.streamPipe({ write: (chunk) => chunks.push(String(chunk)) });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.match(chunks.join(""), /usable stream/);
+    assert.deepEqual(calls, ["stream-1.test", "stream-2.test", "stream-3.test"]);
   });
 
   it("records streaming usage after the final SSE event instead of an early zero-token success", async () => {

@@ -609,10 +609,12 @@ describe("gateway request limits", () => {
 });
 
 describe("combo ordering + retryable", () => {
-  it("marks 429/5xx as retryable", () => {
+  it("marks every non-2xx status as retryable", () => {
     assert.equal(isRetryableStatus(429), true);
     assert.equal(isRetryableStatus(503), true);
-    assert.equal(isRetryableStatus(400), false);
+    assert.equal(isRetryableStatus(400), true);
+    assert.equal(isRetryableStatus(200), false);
+    assert.equal(isRetryableStatus(204), false);
   });
 
   it("round-robin rotates starting index", () => {
