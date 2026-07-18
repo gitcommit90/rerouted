@@ -181,7 +181,7 @@ function orderMembers(resolved, rrState) {
 }
 
 function isRetryableStatus(status) {
-  return status === 401 || status === 403 || status === 408 || status === 429 || status >= 500;
+  return !(status >= 200 && status < 300);
 }
 
 function humanProviderName(attempt) {
@@ -285,6 +285,11 @@ function parseResetHint(response, bodyText, now = Date.now()) {
 function parseEarlyResponsesFailure(text, response) {
   const events = String(text || "").split(/\r?\n\r?\n/);
   for (const event of events) {
+    const eventType = event
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("event:"))
+      ?.slice(6)
+      .trim();
     const dataText = event
       .split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
@@ -302,20 +307,68 @@ function parseEarlyResponsesFailure(text, response) {
       : data?.response?.error && typeof data.response.error === "object"
         ? data.response.error
         : data;
+    const explicitFailure =
+      eventType === "error" ||
+      data?.type === "error" ||
+      data?.type === "response.failed" ||
+      !!data?.error ||
+      !!data?.response?.error;
+    if (!explicitFailure) continue;
     const signature = [data?.type, error?.type, error?.code, error?.message]
       .filter(Boolean)
       .join(" ");
-    if (!/usage[ _-]?limit|rate[ _-]?limit|quota|resource[ _-]?exhaust|insufficient[ _-]?quota/i.test(signature)) {
-      continue;
-    }
-    const message = error?.message || data?.message || "Upstream usage limit reached";
+    const quota =
+      /usage[ _-]?limit|rate[ _-]?limit|quota|resource[ _-]?exhaust|insufficient[ _-]?quota/i.test(
+        signature
+      );
+    const reportedStatus = Number(error?.status ?? data?.status);
+    const status =
+      Number.isInteger(reportedStatus) && reportedStatus >= 400 && reportedStatus <= 599
+        ? reportedStatus
+        : quota
+          ? 429
+          : 502;
+    const message =
+      error?.message || data?.message || error?.code || error?.type || "Upstream stream failed";
     return {
-      status: 429,
+      status,
       error: message,
       resetAt: parseResetHint(response, JSON.stringify(error)),
     };
   }
   return null;
+}
+
+function nonStreamingFailure(text, response) {
+  const bodyText = String(text || "").trim();
+  let status = 502;
+  let error = bodyText || "Upstream returned a non-streaming response to a streaming request";
+  try {
+    const parsed = JSON.parse(bodyText);
+    const upstream =
+      parsed?.error && typeof parsed.error === "object"
+        ? parsed.error
+        : parsed?.response?.error && typeof parsed.response.error === "object"
+          ? parsed.response.error
+          : parsed;
+    const reportedStatus = Number(upstream?.status ?? parsed?.status);
+    if (Number.isInteger(reportedStatus) && reportedStatus >= 400 && reportedStatus <= 599) {
+      status = reportedStatus;
+    }
+    error =
+      upstream?.message ||
+      upstream?.detail ||
+      upstream?.code ||
+      upstream?.type ||
+      error;
+  } catch {
+    /* preserve the plain-text upstream response */
+  }
+  return {
+    status,
+    error: String(error).slice(0, 500),
+    resetAt: parseResetHint(response, bodyText),
+  };
 }
 
 function hasProductiveResponsesEvent(text) {
@@ -330,13 +383,33 @@ function hasProductiveResponsesEvent(text) {
     try {
       const data = JSON.parse(dataText);
       const type = String(data?.type || "");
-      if (type === "response.completed" || type === "response.done" || type === "message_stop") {
-        return true;
-      }
       if (
         type === "response.output_text.delta" &&
         ((typeof data?.delta === "string" && data.delta.length > 0) ||
           (typeof data?.delta?.text === "string" && data.delta.text.length > 0))
+      ) {
+        return true;
+      }
+      if (
+        type === "response.function_call_arguments.delta" &&
+        typeof data?.delta === "string" &&
+        data.delta.length > 0
+      ) {
+        return true;
+      }
+      if (
+        (type === "response.output_item.added" || type === "response.output_item.done") &&
+        (data?.item?.type === "function_call" || data?.item?.type === "custom_tool_call") &&
+        typeof data.item.name === "string" &&
+        data.item.name.length > 0
+      ) {
+        return true;
+      }
+      if (
+        type === "content_block_start" &&
+        data?.content_block?.type === "tool_use" &&
+        typeof data.content_block.name === "string" &&
+        data.content_block.name.length > 0
       ) {
         return true;
       }
@@ -352,8 +425,8 @@ function hasProductiveResponsesEvent(text) {
       if (
         choices.some(
           (choice) =>
-            choice?.finish_reason != null ||
             (typeof choice?.delta?.content === "string" && choice.delta.content.length > 0) ||
+            (typeof choice?.delta?.refusal === "string" && choice.delta.refusal.length > 0) ||
             (typeof choice?.delta?.reasoning_content === "string" &&
               choice.delta.reasoning_content.length > 0) ||
             (Array.isArray(choice?.delta?.tool_calls) && choice.delta.tool_calls.length > 0)
@@ -366,9 +439,10 @@ function hasProductiveResponsesEvent(text) {
         Array.isArray(candidates) &&
         candidates.some(
           (candidate) =>
-            candidate?.finishReason != null ||
             (candidate?.content?.parts || []).some(
-              (part) => typeof part?.text === "string" && part.text.length > 0
+              (part) =>
+                (typeof part?.text === "string" && part.text.length > 0) ||
+                (typeof part?.functionCall?.name === "string" && part.functionCall.name.length > 0)
             )
         )
       ) {
@@ -379,6 +453,26 @@ function hasProductiveResponsesEvent(text) {
     }
   }
   return false;
+}
+
+function isUsableChatCompletion(payload) {
+  return (
+    payload &&
+    typeof payload === "object" &&
+    Array.isArray(payload.choices) &&
+    payload.choices.some(
+      (choice) => {
+        const message = choice?.message;
+        if (!message || typeof message !== "object") return false;
+        if (typeof message.content === "string" && message.content.length > 0) return true;
+        if (Array.isArray(message.content) && message.content.length > 0) return true;
+        if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+        if (message.function_call && typeof message.function_call === "object") return true;
+        if (typeof message.refusal === "string" && message.refusal.length > 0) return true;
+        return false;
+      }
+    )
+  );
 }
 
 function parseSseError(text) {
@@ -484,23 +578,32 @@ function rebuildResponseWithPrelude(response, chunks, reader) {
   });
 }
 
-async function inspectEarlyResponsesSse(response, maxBytes = 64 * 1024) {
+async function inspectEarlyResponsesSse(response) {
   if (!response?.ok || !response.body?.getReader) return { response, failure: null };
   const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
-  if (contentType && !contentType.includes("text/event-stream")) return { response, failure: null };
+  if (contentType && !contentType.includes("text/event-stream")) {
+    const text = await response.text().catch(() => "");
+    try {
+      const payload = JSON.parse(text);
+      if (isUsableChatCompletion(payload)) {
+        return { response: null, failure: null, openAiJson: payload };
+      }
+    } catch {
+      /* classify the non-streaming body below */
+    }
+    return { response: null, failure: nonStreamingFailure(text, response) };
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const chunks = [];
   let text = "";
-  let bytes = 0;
   let done = false;
-  while (bytes < maxBytes) {
+  while (true) {
     const next = await reader.read();
     done = next.done;
     if (done) break;
     chunks.push(next.value);
-    bytes += next.value?.byteLength || 0;
     text += decoder.decode(next.value, { stream: true });
     const failure = parseEarlyResponsesFailure(text, response);
     if (failure) {
@@ -513,6 +616,24 @@ async function inspectEarlyResponsesSse(response, maxBytes = 64 * 1024) {
   }
 
   if (done) {
+    try {
+      const payload = JSON.parse(text);
+      if (isUsableChatCompletion(payload)) {
+        return { response: null, failure: null, openAiJson: payload };
+      }
+    } catch {
+      /* the completed body may be SSE */
+    }
+    if (!hasProductiveResponsesEvent(text)) {
+      return {
+        response: null,
+        failure: {
+          status: 502,
+          error: "Upstream stream ended before producing a usable response",
+          resetAt: null,
+        },
+      };
+    }
     const body = new ReadableStream({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(chunk);
@@ -646,7 +767,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
     if (
       !provider?.id ||
       !isOAuthProvider(provider) ||
-      !result?.fallbackEligible ||
+      !result?.cooldownEligible ||
       result.failureKind === "capability"
     ) {
       return null;
@@ -731,11 +852,54 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
             ok: false,
             status: inspected.failure.status,
             error: inspected.failure.error,
-            retryable: classification.eligible,
-            fallbackEligible: classification.eligible,
+            cooldownEligible: classification.eligible,
             failureKind: classification.kind,
             defaultCooldownMs: classification.defaultCooldownMs,
             resetAt: inspected.failure.resetAt,
+          };
+        }
+        if (inspected.openAiJson) {
+          if (stream) {
+            bound.clearRequestTimeout();
+            cleanupDeferred = true;
+            return {
+              ok: true,
+              status: res.status,
+              streamPipe: async (clientRes) => {
+                try {
+                  const completion = inspected.openAiJson;
+                  const chunk = {
+                    id: completion.id || `chatcmpl-${Date.now()}`,
+                    object: "chat.completion.chunk",
+                    created: completion.created || Math.floor(Date.now() / 1000),
+                    model: completion.model || upstreamModel,
+                    choices: completion.choices.map((choice, index) => ({
+                      index: choice.index ?? index,
+                      delta: choice.message || {},
+                      finish_reason: choice.finish_reason ?? "stop",
+                    })),
+                  };
+                  clientRes.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                  clientRes.write("data: [DONE]\n\n");
+                  return completion.usage || null;
+                } finally {
+                  bound.cleanup();
+                }
+              },
+              providerId: provider.id,
+              providerType: provider.type,
+              providerName: provider.name,
+              model: upstreamModel,
+            };
+          }
+          return {
+            ok: true,
+            status: res.status,
+            openAiJson: inspected.openAiJson,
+            providerId: provider.id,
+            providerType: provider.type,
+            providerName: provider.name,
+            model: upstreamModel,
           };
         }
         res = inspected.response;
@@ -750,8 +914,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
           ok: false,
           status,
           error,
-          retryable: classification.eligible,
-          fallbackEligible: classification.eligible,
+          cooldownEligible: classification.eligible,
           failureKind: classification.kind,
           defaultCooldownMs: classification.defaultCooldownMs,
           resetAt: parseResetHint(res, text),
@@ -759,6 +922,16 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
       }
 
       if (stream) {
+        if (!res.body) {
+          return {
+            ok: false,
+            status: 502,
+            error: "Upstream returned no response body",
+            cooldownEligible: true,
+            failureKind: "transient",
+            defaultCooldownMs: COOLDOWN_MS.transient,
+          };
+        }
         // Response selection succeeded; keep client cancellation, not the header timeout.
         bound.clearRequestTimeout();
         cleanupDeferred = true;
@@ -817,6 +990,16 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
           collect: true,
           reasoningScope: meta.reasoningScope,
         });
+        if (!isUsableChatCompletion(collected)) {
+          return {
+            ok: false,
+            status: 502,
+            error: "Upstream returned no usable completion",
+            cooldownEligible: true,
+            failureKind: "transient",
+            defaultCooldownMs: COOLDOWN_MS.transient,
+          };
+        }
         return {
           ok: true,
           status: 200,
@@ -829,11 +1012,39 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
       }
 
       const raw = await res.json();
+      if (raw?.error || raw?.response?.error) {
+        const error = errorMessageFromText(JSON.stringify(raw), "Upstream returned an error payload");
+        const reportedStatus = Number(raw?.error?.status ?? raw?.response?.error?.status);
+        const errorStatus =
+          Number.isInteger(reportedStatus) && reportedStatus >= 400 && reportedStatus <= 599
+            ? reportedStatus
+            : 502;
+        const classification = classifyFailure(errorStatus, error);
+        return {
+          ok: false,
+          status: errorStatus,
+          error,
+          cooldownEligible: classification.eligible,
+          failureKind: classification.kind,
+          defaultCooldownMs: classification.defaultCooldownMs,
+          resetAt: parseResetHint(res, JSON.stringify(raw)),
+        };
+      }
       let openAiJson = raw;
       if (meta.translate === true || provider.type === "claude") {
         openAiJson = claude.fromAnthropicJson(raw, upstreamModel);
       } else if (meta.translate === "gemini" || provider.type === "antigravity") {
         openAiJson = antigravity.fromGeminiJson(raw, upstreamModel);
+      }
+      if (!isUsableChatCompletion(openAiJson)) {
+        return {
+          ok: false,
+          status: 502,
+          error: "Upstream returned no usable completion",
+          cooldownEligible: true,
+          failureKind: "transient",
+          defaultCooldownMs: COOLDOWN_MS.transient,
+        };
       }
       return {
         ok: true,
@@ -850,8 +1061,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
           ok: false,
           status: 499,
           error: "Client disconnected",
-          retryable: false,
-          fallbackEligible: false,
+          cooldownEligible: false,
           canceled: true,
           failureKind: "canceled",
           defaultCooldownMs: 0,
@@ -862,8 +1072,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
           ok: false,
           status: 408,
           error: e.message || "Upstream request timeout",
-          retryable: true,
-          fallbackEligible: true,
+          cooldownEligible: true,
           failureKind: "transient",
           defaultCooldownMs: COOLDOWN_MS.transient,
         };
@@ -872,8 +1081,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
         ok: false,
         status: 502,
         error: e.message || String(e),
-        retryable: true,
-        fallbackEligible: true,
+        cooldownEligible: true,
         failureKind: "transient",
         defaultCooldownMs: COOLDOWN_MS.transient,
       };
@@ -915,9 +1123,9 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
     let fallbackFrom = null;
     const attemptedOAuthPools = new Set();
     let sawNonOAuthAttempt = false;
-    let stoppedWithoutFallback = false;
+    let lastAttemptedFailure = null;
 
-    routeMembers: for (const member of ordered) {
+    for (const member of ordered) {
       const accounts = member.accounts?.length ? member.accounts : [member.provider];
       for (let accountIndex = 0; accountIndex < accounts.length; accountIndex += 1) {
         const provider = accounts[accountIndex];
@@ -1002,8 +1210,7 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
             ok: false,
             status,
             error: e.message || String(e),
-            retryable: classification.eligible,
-            fallbackEligible: classification.eligible,
+            cooldownEligible: classification.eligible,
             failureKind: classification.kind,
             defaultCooldownMs: classification.defaultCooldownMs,
           };
@@ -1073,31 +1280,28 @@ function createRouter({ store, fetchImpl = fetch, requestLog, timeoutMs, usage, 
           status: result.status,
           error: result.error,
           failureKind: result.failureKind,
-          retryable: !!result.fallbackEligible,
+          retryable: true,
           lockedUntil: savedLock?.until || null,
         };
         errors.push(failed);
+        lastAttemptedFailure = failed;
         logger.warn(oauthAttempt ? "router account failure" : "router route member failure", {
           event: oauthAttempt ? "account_failure" : "route_member_failure",
           routeModel: modelId,
           ...failed,
         });
         fallbackFrom = failed;
-        if (!result.fallbackEligible) {
-          stoppedWithoutFallback = true;
-          break routeMembers;
-        }
       }
     }
 
-    const last = errors[errors.length - 1] || { status: 502, error: "All providers failed" };
+    const last = lastAttemptedFailure ||
+      errors[errors.length - 1] || { status: 502, error: "All providers failed" };
     const attemptsSummary = errors
       .map((attempt) => {
         return `${attemptLabel(attempt)} [${attempt.status || 502}]: ${attempt.error}`;
       })
       .join("; ");
-    const accountsExhausted =
-      attemptedOAuthPools.size === 1 && !sawNonOAuthAttempt && !stoppedWithoutFallback;
+    const accountsExhausted = attemptedOAuthPools.size === 1 && !sawNonOAuthAttempt;
     const terminalMessage = accountsExhausted
       ? `All eligible accounts failed for ${modelId}. Attempts: ${attemptsSummary || "none"}`
       : `Route failed for ${modelId}. Attempts: ${attemptsSummary || "none"}`;
