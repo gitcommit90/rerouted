@@ -1,6 +1,7 @@
 "use strict";
 
 const api = window.rerouted;
+const dashboardRuntime = document.documentElement.classList.contains("dashboard-runtime");
 const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
   window.ReroutedAccountIdentity;
 const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
@@ -13,6 +14,8 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const nav = $("#nav");
 const toastEl = $("#toast");
+const closeButton = $("#btn-close");
+if (!dashboardRuntime) closeButton.hidden = false;
 
 let state = null;
 let page = "home";
@@ -320,9 +323,16 @@ function stepProgress(step) {
 function renderPermissions() {
   view.innerHTML = `
     ${stepProgress("permissions")}
-    <h1 class="h1">Permissions</h1>
-    <p class="lead">ReRouted runs in your menu bar and serves a local API on this Mac only. Enable open at login so the endpoint is ready when you need it. Importing local credentials may prompt for macOS Keychain access.</p>
-    <div class="card">
+    <h1 class="h1">${dashboardRuntime ? "Headless runtime" : "Permissions"}</h1>
+    <p class="lead">${
+      dashboardRuntime
+        ? "ReRouted serves its local API and this dashboard from one headless process. Keep that process running so your tools can always reach the endpoint."
+        : "ReRouted runs in your menu bar and serves a local API on this Mac only. Enable open at login so the endpoint is ready when you need it. Importing local credentials may prompt for macOS Keychain access."
+    }</p>
+    ${
+      dashboardRuntime
+        ? ""
+        : `<div class="card">
       <div class="toggle-row">
         <div>
           <div class="card-title">Open at Login</div>
@@ -330,15 +340,18 @@ function renderPermissions() {
         </div>
         <label class="toggle"><input type="checkbox" id="tog-login" ${state.openAtLogin ? "checked" : ""} /><span></span></label>
       </div>
-    </div>
+    </div>`
+    }
     <div class="btn-row">
       <button type="button" class="btn btn-primary" id="btn-next">Continue</button>
     </div>
   `;
-  $("#tog-login").onchange = async (e) => {
-    await api.invoke("app:set-open-at-login", e.target.checked);
-    await refresh();
-  };
+  if ($("#tog-login")) {
+    $("#tog-login").onchange = async (e) => {
+      await api.invoke("app:set-open-at-login", e.target.checked);
+      await refresh();
+    };
+  }
   $("#btn-next").onclick = () => goStep("admin-password");
 }
 
@@ -346,7 +359,11 @@ function renderAdminPassword() {
   view.innerHTML = `
     ${stepProgress("admin-password")}
     <h1 class="h1">Create admin password</h1>
-    <p class="lead">Your active macOS login unlocks ReRouted. This password is the fallback when the app cannot confirm that session. It is stored as a scrypt hash — never sent anywhere.</p>
+    <p class="lead">${
+      dashboardRuntime
+        ? "This password protects dashboard access to your providers, routes, gateway keys, and activity. It is stored locally as a scrypt hash — never sent anywhere else."
+        : "Your active macOS login unlocks ReRouted. This password is the fallback when the app cannot confirm that session. It is stored as a scrypt hash — never sent anywhere."
+    }</p>
     <input class="input" id="pw1" type="password" placeholder="Password" autocomplete="new-password" />
     <input class="input" id="pw2" type="password" placeholder="Confirm password" autocomplete="new-password" />
     <div class="btn-row">
@@ -370,7 +387,7 @@ function renderWelcome() {
     <h1 class="h1">Your models.<br />One clean route.</h1>
     <p class="lead">Connect subscriptions and API keys once. ReRouted presents a single local endpoint and moves traffic when an account runs out.</p>
     <section class="hero-surface">
-      <div class="gateway-state"><span class="status-node"></span>Runs on this Mac</div>
+      <div class="gateway-state"><span class="status-node"></span>Runs on this ${dashboardRuntime ? "machine" : "Mac"}</div>
       <div class="route-map" aria-hidden="true"><span class="route-source">C</span><span class="route-track"></span><span class="route-source">G</span><span class="route-track"></span><span class="route-destination">/v1</span></div>
       <div class="hero-sub">Claude · ChatGPT · Gemini · Grok · API keys</div>
     </section>
@@ -385,10 +402,10 @@ function renderAutoDetect() {
   view.innerHTML = `
     ${stepProgress("auto-detect")}
     <h1 class="h1">Auto-detect providers?</h1>
-    <p class="lead">ReRouted can import supported credentials already stored on this Mac so you can skip another sign-in. Tokens stay local.</p>
+    <p class="lead">ReRouted can import supported credentials already stored on this ${dashboardRuntime ? "machine" : "Mac"} so you can skip another sign-in. Tokens stay local.</p>
     <div class="btn-row">
       <button type="button" class="btn btn-secondary" id="btn-skip">Skip</button>
-      <button type="button" class="btn btn-primary" id="btn-scan">Scan this Mac</button>
+      <button type="button" class="btn btn-primary" id="btn-scan">Scan this ${dashboardRuntime ? "machine" : "Mac"}</button>
     </div>
     <div id="detect-results"></div>
   `;
@@ -867,7 +884,11 @@ function renderLock() {
       <div class="lock-mark">RR</div>
       <div class="eyebrow">Local control plane</div>
       <h1 class="h1">Unlock ReRouted</h1>
-      <p class="lead">Your Mac session normally unlocks this panel. Enter the admin password if the session state cannot be verified.</p>
+      <p class="lead">${
+        dashboardRuntime
+          ? "Enter your admin password to manage providers, routes, keys, and activity."
+          : "Your Mac session normally unlocks this panel. Enter the admin password if the session state cannot be verified."
+      }</p>
       <input class="input" id="lock-pw" type="password" placeholder="Admin password" />
       <button type="button" class="btn btn-primary" id="btn-unlock">Unlock</button>
     </div>
@@ -2219,6 +2240,7 @@ function renderSettings() {
   const keys = state.apiKeys || [];
   const bindAll = state.bindHost === "0.0.0.0";
   const update = state.update || { status: "idle", currentVersion: state.appVersion };
+  const showDesktopSettings = state.runtime !== "headless";
   const updateUi = {
     idle: {
       copy: "Check for signed releases without leaving ReRouted.",
@@ -2252,13 +2274,13 @@ function renderSettings() {
   }[update.status] || { copy: "Check for signed releases.", label: "Check now" };
   view.innerHTML = `
     ${pageHeader("Control", "Settings", "Configure startup, network exposure, credentials, and local security.")}
-    ${sectionHeader("General")}
-    <section class="settings-group">
+    ${showDesktopSettings ? sectionHeader("General") : ""}
+    ${showDesktopSettings ? `<section class="settings-group">
       <div class="settings-row">
         <div class="settings-copy"><div class="row-title">Open at login</div><div class="row-sub">Keep the local gateway ready after sign-in.</div></div>
         <label class="toggle"><input type="checkbox" id="tog-login" ${state.openAtLogin ? "checked" : ""} /><span></span></label>
       </div>
-    </section>
+    </section>` : ""}
     ${sectionHeader("Gateway", state.serverListening ? "Online" : "Offline")}
     <section class="settings-group">
       <div class="settings-row">
@@ -2294,7 +2316,7 @@ function renderSettings() {
     </section>
     ${sectionHeader("Security")}
     <section class="settings-group">
-      <div class="settings-row stack"><div class="row-title">Change admin password</div><div class="row-sub" style="margin-bottom:9px">Used only when the active Mac session cannot unlock the panel.</div>
+      <div class="settings-row stack"><div class="row-title">Change admin password</div><div class="row-sub" style="margin-bottom:9px">${showDesktopSettings ? "Used only when the active Mac session cannot unlock the panel." : "Required to unlock this dashboard in a new browser session."}</div>
       <input class="input" id="pw-cur" type="password" placeholder="Current password" />
       <input class="input" id="pw-new" type="password" placeholder="New password" />
       <button type="button" class="btn btn-secondary" id="btn-pw">Update password</button>
@@ -2302,16 +2324,18 @@ function renderSettings() {
     </section>
     ${sectionHeader("Application", `ReRouted ${state.appVersion || ""}`)}
     <section class="settings-group">
-      <div class="settings-row update-row"><div class="settings-copy"><div class="row-title">Software updates</div><div class="row-sub">${esc(updateUi.copy)}</div></div><button type="button" class="btn ${updateUi.primary ? "btn-primary" : "btn-secondary"} btn-sm" id="btn-update" ${updateUi.disabled ? "disabled" : ""}>${esc(updateUi.label)}</button></div>
-      <div class="settings-row"><div class="settings-copy"><div class="row-title">Quit ReRouted</div><div class="row-sub">Stops the menu bar app and local gateway.</div></div><button type="button" class="btn btn-danger btn-sm" id="btn-quit">Quit</button></div>
+      <div class="settings-row update-row"><div class="settings-copy"><div class="row-title">Software updates</div><div class="row-sub">${esc(updateUi.copy)}</div></div>${showDesktopSettings ? `<button type="button" class="btn ${updateUi.primary ? "btn-primary" : "btn-secondary"} btn-sm" id="btn-update" ${updateUi.disabled ? "disabled" : ""}>${esc(updateUi.label)}</button>` : ""}</div>
+      ${showDesktopSettings ? '<div class="settings-row"><div class="settings-copy"><div class="row-title">Quit ReRouted</div><div class="row-sub">Stops the menu bar app and local gateway.</div></div><button type="button" class="btn btn-danger btn-sm" id="btn-quit">Quit</button></div>' : ""}
     </section>
     <div class="publisher-note"><button type="button" id="btn-product-site">ReRouted.dev</button> &middot; Independent personal project.</div>
   `;
   wireSecrets();
   $("#copy-settings-url").onclick = () => copy(state.endpoint);
-  $("#tog-login").onchange = async (e) => {
-    await api.invoke("app:set-open-at-login", e.target.checked);
-  };
+  if ($("#tog-login")) {
+    $("#tog-login").onchange = async (e) => {
+      await api.invoke("app:set-open-at-login", e.target.checked);
+    };
+  }
   $("#tog-srv").onchange = async (e) => {
     await api.invoke("app:set-server-enabled", e.target.checked);
     await refresh();
@@ -2355,7 +2379,7 @@ function renderSettings() {
     });
     toast(r.ok ? "Password updated" : r.error || "Failed");
   };
-  $("#btn-update").onclick = async () => {
+  if ($("#btn-update")) $("#btn-update").onclick = async () => {
     const current = state.update?.status;
     const result = await api.invoke(
       current === "ready" ? "app:update-install" : "app:update-check"
@@ -2364,7 +2388,7 @@ function renderSettings() {
     if (!result?.ok && result?.error) toast(result.error);
     if (page === "settings") render();
   };
-  $("#btn-quit").onclick = () => api.invoke("app:quit");
+  if ($("#btn-quit")) $("#btn-quit").onclick = () => api.invoke("app:quit");
   $("#btn-product-site").onclick = () =>
     api.invoke("app:open-external", "https://rerouted.dev");
 }
@@ -2449,7 +2473,7 @@ nav.querySelectorAll(".nav-btn").forEach((btn) => {
   };
 });
 
-$("#btn-close").onclick = () => api.invoke("app:hide-panel");
+closeButton.onclick = () => api.invoke("app:hide-panel");
 
 api.on("app:session-lock-changed", async (session) => {
   if (state && session?.unlocked === false) {

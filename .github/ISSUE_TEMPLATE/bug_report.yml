@@ -20,10 +20,10 @@ body:
     validations:
       required: true
   - type: input
-    id: macos
+    id: environment
     attributes:
-      label: macOS version and Mac
-      placeholder: "macOS 15.5, M2 MacBook Air"
+      label: Operating system and installation
+      placeholder: "macOS 15.5 DMG, or Ubuntu 24.04 Linux CLI tarball"
     validations:
       required: true
   - type: input

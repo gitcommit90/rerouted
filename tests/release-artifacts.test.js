@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { updateZipName, isRecognizedMacUpdateZip } = require("../scripts/release-artifacts");
+const { linuxCliArtifactNames } = require("../scripts/package-linux-cli");
 
 test("names updater ZIPs for the macOS Apple Silicon release feed", () => {
   const name = updateZipName("ReRouted", "0.3.1", "arm64");
@@ -29,4 +30,12 @@ test("declares MIT and includes its notice in packaged release copies", () => {
   assert.match(license, /^MIT License\n/);
   assert.match(packager, /path\.join\(ROOT, "LICENSE"\)/);
   assert.match(packager, /path\.join\(stage, "LICENSE\.txt"\)/);
+});
+
+test("names the versioned and stable Linux CLI release tarballs", () => {
+  assert.deepEqual(linuxCliArtifactNames("1.2.3"), {
+    versioned: "ReRouted-1.2.3-linux-node.tgz",
+    latest: "ReRouted-linux-node.tgz",
+  });
+  assert.throws(() => linuxCliArtifactNames("latest"), /semantic package version/i);
 });

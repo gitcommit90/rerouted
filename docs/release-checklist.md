@@ -1,6 +1,6 @@
 # Release checklist
 
-This is the required finish line for every ReRouted change, including fixes, features, refactors, UI adjustments, and documentation iterations.
+This is the required finish line for every ReRouted change, including fixes, features, refactors, UI adjustments, and documentation iterations. Releases that include the headless runtime must verify both the macOS artifacts and Linux CLI package.
 
 **Do not say "done" until every check has passed.**
 
@@ -127,9 +127,52 @@ trap - EXIT
 
 Record the version, merged commit, DMG filename, and SHA-256 before installation.
 
+## 5b. Build the Linux CLI from merged `main`
+
+From an exact clean checkout of the same merged commit on Linux:
+
+```bash
+set -euo pipefail
+
+test "$(git rev-parse HEAD)" = "$MERGED_COMMIT"
+test -z "$(git status --porcelain)"
+npm ci
+npm test
+npm run package:linux
+
+CLI_TGZ="dist/ReRouted-${VERSION}-linux-node.tgz"
+CLI_LATEST="dist/ReRouted-linux-node.tgz"
+test -s "$CLI_TGZ"
+test -s "$CLI_LATEST"
+CLI_SHA="$(sha256sum "$CLI_TGZ" | awk '{print $1}')"
+test "$(sha256sum "$CLI_LATEST" | awk '{print $1}')" = "$CLI_SHA"
+tar -tzf "$CLI_TGZ" | grep -Fx 'package/LICENSE'
+tar -tzf "$CLI_TGZ" | grep -Fx 'package/src/cli/index.js'
+tar -tzf "$CLI_TGZ" | grep -Fx 'package/src/renderer/index.html'
+test -z "$(tar -tzf "$CLI_TGZ" | grep -E '(^|/)AGENTS\.md$' || true)"
+
+INSTALL_ROOT="$(mktemp -d)"
+mkdir -p "$INSTALL_ROOT/home"
+HOME="$INSTALL_ROOT/home" npm install --global --prefix "$INSTALL_ROOT/npm" "$(realpath "$CLI_TGZ")"
+test "$("$INSTALL_ROOT/npm/bin/rerouted" --version)" = "$VERSION"
+"$INSTALL_ROOT/npm/bin/rerouted" --data-dir "$INSTALL_ROOT/data" --port 54949 --no-interactive >"$INSTALL_ROOT/out" 2>"$INSTALL_ROOT/err" &
+CLI_PID=$!
+for _ in $(seq 1 30); do
+  curl -fsS http://127.0.0.1:54949/health && break
+  sleep 1
+done
+curl -fsS http://127.0.0.1:54949/dashboard/ | grep -F 'web-api.js'
+kill -TERM "$CLI_PID"
+wait "$CLI_PID"
+test ! -e "$INSTALL_ROOT/data/rerouted.pid"
+rm -rf "$INSTALL_ROOT"
+```
+
+Record the versioned filename and SHA-256. The stable alias must be byte-for-byte identical.
+
 ## 6. Publish the exact build
 
-Tag the exact commit used for packaging. Create a draft release, upload both verified artifacts, and publish only after their server-side digests match. Publishing is the update activation point.
+Tag the exact commit used for packaging. Create a draft release, upload every verified artifact, and publish only after their server-side digests match. Publishing is the macOS update activation point and makes the stable Linux alias public.
 
 ```bash
 set -euo pipefail
@@ -137,12 +180,16 @@ set -euo pipefail
 TAG="v${VERSION}"
 LOCAL_SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
 UPDATE_SHA="$(shasum -a 256 "$UPDATE_ZIP" | awk '{print $1}')"
+CLI_TGZ="$ORIGINAL_REPO/dist/ReRouted-${VERSION}-linux-node.tgz"
+CLI_LATEST="$ORIGINAL_REPO/dist/ReRouted-linux-node.tgz"
+CLI_SHA="$(sha256sum "$CLI_TGZ" | awk '{print $1}')"
+test "$(sha256sum "$CLI_LATEST" | awk '{print $1}')" = "$CLI_SHA"
 
 test "$(git rev-parse HEAD)" = "$MERGED_COMMIT"
 git tag -a "$TAG" "$MERGED_COMMIT" -m "ReRouted ${VERSION}"
 git push origin "refs/tags/$TAG:refs/tags/$TAG"
 
-gh release create "$TAG" "$DMG#ReRouted ${VERSION} for Apple Silicon" "$UPDATE_ZIP#ReRouted ${VERSION} in-app update" \
+gh release create "$TAG" "$DMG#ReRouted ${VERSION} for Apple Silicon" "$UPDATE_ZIP#ReRouted ${VERSION} in-app update" "$CLI_TGZ#ReRouted ${VERSION} headless Linux CLI" "$CLI_LATEST#ReRouted headless Linux CLI (latest stable)" \
   --repo gitcommit90/rerouted \
   --verify-tag \
   --draft \
@@ -152,8 +199,12 @@ gh release create "$TAG" "$DMG#ReRouted ${VERSION} for Apple Silicon" "$UPDATE_Z
 test "$(git rev-list -n 1 "$TAG")" = "$MERGED_COMMIT"
 REMOTE_DIGEST="$(gh release view "$TAG" --repo gitcommit90/rerouted --json assets --jq ".assets[] | select(.name == \"$(basename "$DMG")\") | .digest")"
 REMOTE_UPDATE_DIGEST="$(gh release view "$TAG" --repo gitcommit90/rerouted --json assets --jq ".assets[] | select(.name == \"$(basename "$UPDATE_ZIP")\") | .digest")"
+REMOTE_CLI_DIGEST="$(gh release view "$TAG" --repo gitcommit90/rerouted --json assets --jq ".assets[] | select(.name == \"$(basename "$CLI_TGZ")\") | .digest")"
+REMOTE_CLI_LATEST_DIGEST="$(gh release view "$TAG" --repo gitcommit90/rerouted --json assets --jq ".assets[] | select(.name == \"$(basename "$CLI_LATEST")\") | .digest")"
 test "$REMOTE_DIGEST" = "sha256:$LOCAL_SHA"
 test "$REMOTE_UPDATE_DIGEST" = "sha256:$UPDATE_SHA"
+test "$REMOTE_CLI_DIGEST" = "sha256:$CLI_SHA"
+test "$REMOTE_CLI_LATEST_DIGEST" = "sha256:$CLI_SHA"
 gh release edit "$TAG" --repo gitcommit90/rerouted --draft=false --latest
 ```
 
@@ -163,10 +214,14 @@ Download the published asset into a clean directory and verify it before install
 PUBLISHED_DIR="$(mktemp -d)"
 gh release download "$TAG" --repo gitcommit90/rerouted --pattern "$(basename "$DMG")" --dir "$PUBLISHED_DIR"
 gh release download "$TAG" --repo gitcommit90/rerouted --pattern "$(basename "$UPDATE_ZIP")" --dir "$PUBLISHED_DIR"
+gh release download "$TAG" --repo gitcommit90/rerouted --pattern "$(basename "$CLI_TGZ")" --dir "$PUBLISHED_DIR"
+gh release download "$TAG" --repo gitcommit90/rerouted --pattern "$(basename "$CLI_LATEST")" --dir "$PUBLISHED_DIR"
 PUBLISHED_DMG="$PUBLISHED_DIR/$(basename "$DMG")"
 PUBLISHED_UPDATE="$PUBLISHED_DIR/$(basename "$UPDATE_ZIP")"
 test "$(shasum -a 256 "$PUBLISHED_DMG" | awk '{print $1}')" = "$LOCAL_SHA"
 test "$(shasum -a 256 "$PUBLISHED_UPDATE" | awk '{print $1}')" = "$UPDATE_SHA"
+test "$(sha256sum "$PUBLISHED_DIR/$(basename "$CLI_TGZ")" | awk '{print $1}')" = "$CLI_SHA"
+test "$(sha256sum "$PUBLISHED_DIR/$(basename "$CLI_LATEST")" | awk '{print $1}')" = "$CLI_SHA"
 
 curl -fsS "https://update.electronjs.org/gitcommit90/rerouted/darwin-arm64/0.0.0" | grep -F "$(basename "$UPDATE_ZIP")"
 test "$(curl -sS -o /dev/null -w '%{http_code}' "https://update.electronjs.org/gitcommit90/rerouted/darwin-arm64/${VERSION}")" = "204"
@@ -235,6 +290,10 @@ ssh macair '
 
 The installed version must match `package.json`, the process must be running from `/Applications/ReRouted.app`, and the local health endpoint must answer successfully.
 
+## 8b. Verify the public Linux CLI
+
+Install the exact public `ReRouted-linux-node.tgz` URL into a clean temporary npm prefix and repeat the version, `/health`, `/dashboard/`, SIGTERM, and PID-lock checks from step 5b. The installed `rerouted --version` must match `package.json`, and the public download digest must equal `CLI_SHA`.
+
 ## 9. Final evidence
 
 The completion report must contain all five values:
@@ -245,9 +304,11 @@ Merged commit:  <origin/main commit SHA>
 DMG:            ReRouted-<version>-arm64.dmg
 DMG SHA-256:    <sha256>
 Update ZIP:     ReRouted-<version>-mac-arm64.zip (<sha256>)
+Linux CLI:      ReRouted-<version>-linux-node.tgz (<sha256>)
 Release:        <GitHub release URL and matching asset digest>
 Gatekeeper:     Developer ID signature, app ticket, and DMG ticket verified
 MacBook Air:    installed version verified, process running, health check passed
+Linux CLI:      public tarball installed, version/health/dashboard/shutdown verified
 ```
 
-If the DMG was not rebuilt, signed, notarized, and stapled; the MacBook Air was not updated; the code was not committed and pushed; or the change was not merged to `main`, the iteration is not complete. State the missing step plainly and do not use the word "done."
+If the DMG was not rebuilt, signed, notarized, and stapled; the Linux CLI was not packaged and publicly smoke-tested; the MacBook Air was not updated; the code was not committed and pushed; or the change was not merged to `main`, the iteration is not complete. State the missing step plainly and do not use the word "done."

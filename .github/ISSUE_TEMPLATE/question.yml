@@ -20,8 +20,8 @@ body:
   - type: input
     id: environment
     attributes:
-      label: macOS version and client
-      placeholder: "macOS 15.5, client name/version"
+      label: Operating system, installation, and client
+      placeholder: "Ubuntu 24.04, Linux CLI tarball, client name/version"
     validations:
       required: true
   - type: textarea
