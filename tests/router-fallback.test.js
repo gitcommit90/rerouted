@@ -1365,6 +1365,77 @@ describe("same-provider OAuth account fallback", () => {
     assert.deepEqual(calls, ["stream-1.test", "stream-2.test", "stream-3.test"]);
   });
 
+  it("bounds pre-output stream inspection and reroutes an oversized metadata preamble", async () => {
+    const store = createStore(tmpConfig());
+    const providers = ["Slow preamble", "Backup"].map((name, index) => ({
+      id: `prov_bounded_${index + 1}`,
+      type: "openai-compat",
+      name,
+      baseUrl: `https://bounded-${index + 1}.test/v1`,
+      apiKey: `bounded-key-${index + 1}`,
+      enabled: true,
+      models: [{ id: `bounded-model-${index + 1}`, name, enabled: true }],
+    }));
+    store.seed({
+      providers,
+      combos: [
+        {
+          id: "combo_bounded",
+          strategy: "fallback",
+          members: providers.map((provider, index) => ({
+            providerId: provider.id,
+            model: `bounded-model-${index + 1}`,
+          })),
+        },
+      ],
+    });
+    const calls = [];
+    let canceled = false;
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (url) => {
+        calls.push(new URL(url).hostname);
+        if (url.includes("bounded-1")) {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify({ type: "response.created", padding: "x".repeat(70 * 1024) })}\n\n`
+                  )
+                );
+              },
+              cancel() {
+                canceled = true;
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } }
+          );
+        }
+        return new Response(
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "bounded fallback" } }] })}\n\ndata: [DONE]\n\n`,
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        );
+      },
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "combo_bounded",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      },
+    });
+    const chunks = [];
+    await result.streamPipe({ write: (chunk) => chunks.push(String(chunk)) });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(canceled, true);
+    assert.match(chunks.join(""), /bounded fallback/);
+    assert.deepEqual(calls, ["bounded-1.test", "bounded-2.test"]);
+  });
+
   it("records streaming usage after the final SSE event instead of an early zero-token success", async () => {
     const store = createStore(tmpConfig());
     store.seed({ providers: [oauthAccount("prov_a", "token-a", 100)] });
