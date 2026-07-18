@@ -25,7 +25,7 @@
 </div>
 
 <p align="center">
-  <img src="./docs/images/product-tour.gif" width="900" alt="ReRouted Status panel — local gateway, providers, and live traffic" />
+  <img src="./docs/images/product-tour.gif" width="360" alt="ReRouted Status panel — local gateway, providers, and live traffic" />
 </p>
 
 ## One URL. The routing decision lives somewhere sane.
