@@ -48,6 +48,12 @@ describe("password + api key", () => {
     const k = generateApiKey();
     assert.match(k, /^rr-[a-f0-9]{32}$/);
   });
+
+  it("rejects malformed scrypt hashes without allocating attacker-sized keys", async () => {
+    assert.equal(await verifyPassword("password", "scrypt$00$ff"), false);
+    assert.equal(await verifyPassword("password", `scrypt$${"00".repeat(16)}$${"ff".repeat(65)}`), false);
+    assert.equal(await verifyPassword("password", "scrypt$not-hex$also-not-hex"), false);
+  });
 });
 
 describe("store atomic write + mode", () => {

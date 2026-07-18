@@ -181,6 +181,10 @@ summary:focus-visible,
   cursor: pointer;
 }
 
+.icon-btn[hidden] {
+  display: none !important;
+}
+
 .icon-btn:hover {
   color: #fff;
   background: rgba(255, 255, 255, 0.1);
@@ -2094,6 +2098,79 @@ summary:focus-visible,
 @keyframes draw-route {
   from { opacity: 0.25; transform: scaleX(0); }
   to { opacity: 1; transform: scaleX(1); }
+}
+
+.dashboard-runtime,
+.dashboard-runtime body {
+  min-width: 320px;
+  min-height: 100%;
+  overflow: auto;
+  background: var(--canvas);
+}
+
+.dashboard-runtime body {
+  display: grid;
+  place-items: start center;
+  padding: clamp(12px, 3vw, 36px);
+}
+
+.dashboard-runtime .shell {
+  width: min(100%, 980px);
+  height: min(860px, calc(100vh - clamp(24px, 6vw, 72px)));
+  min-height: 620px;
+  border-color: var(--line-strong);
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(27, 29, 24, 0.16);
+}
+
+.dashboard-runtime .titlebar {
+  padding-inline: 22px;
+  -webkit-app-region: no-drag;
+}
+
+.dashboard-runtime .view {
+  padding: 26px clamp(24px, 5vw, 58px) 40px;
+}
+
+.dashboard-runtime .lead {
+  max-width: 620px;
+}
+
+.dashboard-runtime .provider-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+
+.dashboard-runtime .nav {
+  min-height: 68px;
+  padding-inline: clamp(24px, 8vw, 110px);
+}
+
+@media (max-width: 680px) {
+  .dashboard-runtime body {
+    display: block;
+    padding: 0;
+  }
+
+  .dashboard-runtime .shell {
+    width: 100%;
+    height: 100dvh;
+    min-height: 540px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .dashboard-runtime .titlebar {
+    padding-inline: 16px 10px;
+  }
+
+  .dashboard-runtime .view {
+    padding: 20px 18px 28px;
+  }
+
+  .dashboard-runtime .nav {
+    padding-inline: 8px;
+  }
 }
 
 @media (max-width: 360px) {

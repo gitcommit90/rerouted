@@ -12,7 +12,7 @@ Please do not open a pull request with code or documentation changes yet. It may
 
 1. Install the latest stable release and check existing issues.
 2. Confirm the behavior with the smallest route and request that reproduce it.
-3. Record the ReRouted version, macOS version, provider type, authentication method, model, client, and whether the request streamed.
+3. Record the ReRouted version, operating system, installation method, provider type, authentication method, model, client, and whether the request streamed.
 4. Replace account names, model identifiers, or request content when they are not essential to the report.
 
 Never attach `config.json` or paste full, unreviewed diagnostics. Remove API keys, gateway keys, tokens, OAuth callback URLs or codes, cookies, account IDs, email addresses, prompts, and private provider responses.
@@ -40,7 +40,7 @@ npm test
 git diff --check
 ```
 
-Node.js 22.13 or newer is required. The packaged application currently targets Apple Silicon and macOS 12 Monterey or newer.
+Node.js 22.13 or newer is required. The headless runtime is supported on Linux. The packaged desktop application targets Apple Silicon and macOS 12 Monterey or newer.
 
 Maintainers handle package version changes, signing, notarization, release publication, and installation verification. Reproduction branches should not include generated release artifacts or real provider credentials.
 

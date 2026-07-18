@@ -3,8 +3,8 @@
   <h1>ReRouted</h1>
   <p><strong>Stop rewiring your AI tools every time an account hits quota.</strong></p>
   <p>
-    A macOS menu-bar router that puts your connected accounts, models,
-    API keys, and fallback routes behind one local endpoint.
+    A local router for macOS and Linux that puts your connected accounts,
+    models, API keys, and fallback routes behind one endpoint.
   </p>
   <p>
     <a href="https://rerouted.dev">Website</a> |
@@ -18,6 +18,7 @@
   <p>
     <a href="https://github.com/gitcommit90/rerouted/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/gitcommit90/rerouted?color=ef5b2a&label=release" /></a>
     <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-1b1d18?logo=apple&logoColor=white" />
+    <img alt="Linux headless" src="https://img.shields.io/badge/Linux-headless%20%2B%20dashboard-1b1d18?logo=linux&logoColor=white" />
     <img alt="Local first" src="https://img.shields.io/badge/gateway-local--first-247454" />
     <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-ef5b2a" /></a>
   </p>
@@ -51,9 +52,9 @@ The promise is deliberately focused: ReRouted exposes model discovery, OpenAI-st
 | A model name hard-codes a provider or account | A named route describes intent: `coding`, `fast`, `review` |
 | Quota means stopping to edit settings | The next route member is attempted automatically |
 | Multiple OAuth accounts are managed by hand | OAuth accounts share a provider pool and fall through in order |
-| Requests and failures are scattered | Activity, quota, token counts, and logs live in the menu bar |
+| Requests and failures are scattered | Activity, quota, token counts, and logs live in one control plane |
 
-No hosted control plane. No account with ReRouted. No Dock icon. The gateway and panel run together on your Mac.
+No hosted control plane and no ReRouted account. On macOS, the gateway and panel run together in the menu bar. On Linux, one headless process serves the gateway, interactive CLI setup, and the same control plane at `/dashboard/`.
 
 ## How it works
 
@@ -87,7 +88,7 @@ Timeouts and retryable `408`, `429`, and `5xx` responses can advance the route. 
 - **OAuth accounts:** ChatGPT, Claude, Antigravity, and xAI.
 - **API-key presets:** OpenRouter, NVIDIA NIM, Cloudflare, and GLM Coding.
 - **Custom upstreams:** any service that exposes the OpenAI chat-completions shape ReRouted expects.
-- **Local credential discovery:** supported credentials already stored in known files or the macOS Keychain can be imported instead of re-entered.
+- **Local credential discovery:** supported credentials already stored in known files, or in the macOS Keychain where available, can be imported instead of re-entered.
 - **Multiple accounts:** connect more than one account for the same provider and use shared or account-specific model routes.
 
 OAuth accounts and keyed providers can live in the same route. ReRouted handles request translation and normalizes supported upstream responses back into the shape your client expects.
@@ -98,7 +99,7 @@ ReRouted is an independent project and is not affiliated with or endorsed by any
 
 ## Quick start
 
-### 1. Install
+### 1. Install on macOS
 
 [Download the latest ReRouted release for Apple Silicon](https://github.com/gitcommit90/rerouted/releases/latest), open the DMG, and drag ReRouted to Applications.
 
@@ -107,6 +108,41 @@ ReRouted requires Apple Silicon and macOS 12 Monterey or newer.
 The macOS release is Developer ID signed, notarized by Apple, and stapled for a normal Gatekeeper launch.
 
 After the first install, ReRouted checks stable releases in the background. You can also use **Settings → Software updates** at any time; new versions download inside the app and install on restart.
+
+### Or install the headless Linux CLI
+
+ReRouted requires Node.js 22.13 or newer. Install the current CLI tarball from the stable GitHub Release; it provides the short `rerouted` command:
+
+```bash
+npm install --global https://github.com/gitcommit90/rerouted/releases/latest/download/ReRouted-linux-node.tgz
+rerouted
+```
+
+The first run opens the interactive terminal setup when a TTY is attached and prints both local URLs:
+
+```text
+Gateway   http://127.0.0.1:4949/v1
+Dashboard http://127.0.0.1:4949/dashboard/
+```
+
+When started by systemd, Docker, SSH automation, or another non-interactive process, open the printed dashboard URL from the same machine to finish first-time setup. The browser flow covers the same providers, routes, activity, quota, keys, and settings as the menu-bar app. Dashboard sessions require the local admin password after onboarding. Run `rerouted help` for bind, port, and data-directory options.
+
+For a persistent user service after setup:
+
+```ini
+# ~/.config/systemd/user/rerouted.service
+[Unit]
+Description=ReRouted local AI gateway
+
+[Service]
+ExecStart=%h/.local/bin/rerouted --no-interactive
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Use the actual path from `command -v rerouted` if npm installed it elsewhere, then run `systemctl --user enable --now rerouted`.
 
 ### 2. Connect what you already use
 
@@ -152,21 +188,21 @@ Claude Code uses the Anthropic Messages route. Point it at the gateway with its 
 
 ReRouted accepts both `/v1/messages` and `/v1/v1/messages`, so current Claude Code versions work whether they append `/messages` or `/v1/messages` to that base URL.
 
-## The menu-bar control plane
+## One control plane, two shells
 
 - **Status:** gateway health, endpoint, latest route, and recent traffic.
 - **Accounts:** OAuth sessions, imported credentials, API keys, and model availability.
 - **Routes:** named fallback or round-robin model groups with explicit ordering controls.
 - **Activity:** requests, failures, token counts, route choices, and account usage.
 - **Quota:** provider-specific subscription windows where supported.
-- **Settings:** gateway keys, localhost or network binding, login launch, security controls, and signed software updates.
+- **Settings:** gateway keys, localhost or network binding, security controls, and platform-appropriate startup/update information.
 
 <p align="center">
   <img src="./docs/images/status.png" width="400" alt="ReRouted status panel" />
   <img src="./docs/images/route-editor.png" width="400" alt="ReRouted route editor" />
 </p>
 
-The gateway continues running when the panel is hidden. Quitting ReRouted stops both.
+On macOS, hiding the panel leaves the gateway running. On Linux, keep the `rerouted` process or your service manager running; closing the dashboard tab does not stop it.
 
 ## API surface
 
@@ -174,6 +210,7 @@ The gateway continues running when the panel is hidden. Quitting ReRouted stops 
 | --- | --- |
 | `GET /` | Same unauthenticated local health response as `/health` |
 | `GET /health` | Local gateway health and listening port |
+| `GET /dashboard/` | Local web control plane in the headless runtime |
 | `GET /v1/models` | Enabled direct models and named routes |
 | `POST /v1/chat/completions` | Streaming or non-streaming routed chat completions |
 | `POST /v1/responses` | Streaming or non-streaming routed Responses API requests |
@@ -192,6 +229,7 @@ Requests require a generated gateway key except for `/` and `/health`. OpenAI ro
 - Provider credentials are not encrypted at rest.
 - Requests and the credentials needed to authorize them are sent to the upstream services you choose.
 - Enabling network access binds the gateway to `0.0.0.0`; only do that on a network you trust.
+- The dashboard uses a separate, per-browser session protected by the local admin password. First-time browser setup is restricted to loopback.
 
 See [Privacy](./PRIVACY.md) for the local files ReRouted keeps, the network services it contacts, and how to remove its data.
 
@@ -203,9 +241,9 @@ See [Privacy](./PRIVACY.md) for the local files ReRouted keeps, the network serv
 
 ReRouted is open source under the [MIT License](./LICENSE). External code contributions are not currently accepted while the contribution process is finalized; focused issues and sanitized reproduction reports are welcome. See [Contributing](./CONTRIBUTING.md) for the current policy.
 
-## Build from source
+## Build or run from source
 
-Requires Node.js 22.13 or newer. Packaging requires macOS and produces an Apple Silicon DMG.
+Requires Node.js 22.13 or newer. The test suite and headless runtime run on Linux; DMG packaging remains a separate macOS-only path.
 
 ```bash
 git clone https://github.com/gitcommit90/rerouted.git
@@ -215,17 +253,23 @@ npm test
 npm start
 ```
 
+Run the headless CLI instead:
+
+```bash
+npm run start:headless
+```
+
 Package the macOS app and DMG:
 
 ```bash
 npm run package:dmg
 ```
 
-The implementation is intentionally small: Electron, Node's built-in HTTP server, and a vanilla HTML/CSS/JavaScript renderer. See [the architecture document](./docs/architecture.md) for the runtime, routing, persistence, and packaging details.
+The shared implementation uses Node's built-in HTTP server and a vanilla HTML/CSS/JavaScript control plane. Electron supplies the macOS menu-bar shell; the Linux CLI supplies the headless shell and serves that same renderer from `/dashboard/`. See [the architecture document](./docs/architecture.md) for the runtime, routing, persistence, and packaging details.
 
 ## Current release
 
-Public builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The public API is intentionally limited to health, model discovery, chat completions, Responses, and Anthropic Messages compatibility; a published third-party client compatibility matrix is still forthcoming.
+macOS builds are Developer ID signed, notarized, stapled, and distributed through stable GitHub Releases with in-app updates. The Linux CLI is a separate npm-compatible tarball on the same stable release and is updated by rerunning its npm install command. The public API is intentionally limited to health, model discovery, chat completions, Responses, and Anthropic Messages compatibility; a published third-party client compatibility matrix is still forthcoming.
 
 ## License
 

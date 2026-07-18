@@ -4,13 +4,13 @@ This document describes the implementation in this repository today. It is the c
 
 ## Runtime shape
 
-ReRouted is one Electron process with three jobs:
+ReRouted has two shells around one shared runtime:
 
-1. Own the macOS menu-bar icon and panel window.
-2. Run the local HTTP gateway.
-3. Persist provider, route, usage, and diagnostic state.
+1. The macOS Electron shell owns the menu-bar icon, native panel, login-item preference, and signed updater.
+2. The Linux headless shell owns the terminal lifecycle, interactive setup, and dashboard HTTP transport.
+3. Both create the same store, router, gateway, usage, request-activity, quota, and control-plane services.
 
-There is no separate daemon. Closing or hiding the panel does not stop the gateway; quitting ReRouted does.
+There is no hosted control plane. On macOS, closing or hiding the panel does not stop the gateway; quitting ReRouted does. On Linux, closing the dashboard does not stop the gateway; stopping the `rerouted` process does.
 
 ```text
 OpenAI-style or Anthropic Messages client
@@ -32,13 +32,19 @@ src/lib/providers/*  --->  upstream provider API
 Response in the client's original API shape
 ```
 
-## Main process and panel
+## Shared control plane and platform shells
 
-`src/main.js` owns the single-instance lock, tray, frameless panel window, login-item preference, IPC handlers, store, usage store, router, and gateway lifecycle.
+`src/lib/control-plane.js` owns the platform-neutral actions used by onboarding and the Status, Accounts, Routes, Activity, Quota, and Settings pages. Provider additions, OAuth completion, named routes, model controls, gateway keys, admin authentication, quota, usage, and logs pass through that one contract.
+
+`src/main.js` wires the contract to allowlisted Electron IPC and adds the single-instance lock, tray, frameless panel window, login-item preference, macOS session authentication, and updater.
+
+`src/cli/index.js` wires the same contract to a headless process created by `src/lib/headless-runtime.js`. The CLI performs interactive first-run setup when attached to a TTY. `src/lib/dashboard.js` serves the shared renderer and a JSON action transport at `/dashboard/`.
 
 The panel is a local file loaded from `src/renderer/index.html`. `src/preload.js` exposes an allowlisted IPC bridge to `src/renderer/app.js`; context isolation and the renderer sandbox are enabled, and renderer Node integration is disabled.
 
-The renderer is vanilla HTML, CSS, and JavaScript. It renders onboarding and the Status, Accounts, Routes, Activity, and Settings pages from state returned by the main process.
+The renderer is vanilla HTML, CSS, and JavaScript. It renders onboarding and the Status, Accounts, Routes, Activity, and Settings pages from state returned by the shared control plane. `src/renderer/web-api.js` provides the browser transport when Electron's preload bridge is absent.
+
+Each browser receives an independent, HttpOnly, same-site dashboard session. After onboarding, sensitive state and mutations require the scrypt-hashed admin password for that browser session. Browser action requests require an exact same-origin match, repeated password failures are throttled, dashboard assets are allowlisted, and first-time browser setup is accepted only over loopback. The gateway's `rr-` bearer keys and dashboard sessions are separate authentication boundaries.
 
 ## Gateway contract
 
@@ -48,13 +54,14 @@ The renderer is vanilla HTML, CSS, and JavaScript. It renders onboarding and the
 | --- | --- | --- |
 | `GET /` | None | Same process health response as `/health` |
 | `GET /health` | None | App name and current listening port |
+| `GET /dashboard/` | Browser session | Headless control-plane renderer and same-origin action transport |
 | `GET /v1/models` | Bearer key | Enabled provider models plus named route IDs |
 | `POST /v1/chat/completions` | Bearer key | Streaming or non-streaming routed chat completion |
 | `POST /v1/responses` | Bearer key | Responses requests adapted through the chat-completions router |
 | `POST /v1/messages` | Bearer key or `x-api-key` | Anthropic Messages requests adapted through the chat-completions router |
 | `POST /v1/messages/count_tokens` | Bearer key or `x-api-key` | Local best-effort input-token estimate without an upstream request |
 
-The default bind is `127.0.0.1:4949`. Settings can switch the host to `0.0.0.0` for LAN or Tailscale access. CORS is currently `*`, so the bearer key is the gateway's access boundary when network binding is enabled.
+The default bind is `127.0.0.1:4949`. Settings or CLI options can switch the host to `0.0.0.0` for LAN or Tailscale access. CORS for `/v1` is currently `*`, so the bearer key is the API boundary when network binding is enabled. Dashboard control requests do not use that CORS policy and require same-origin browser requests plus the dashboard session/password boundary above.
 
 JSON request bodies are limited to 32 MiB. Oversized requests receive a JSON `413` response before routing begins.
 
@@ -97,15 +104,15 @@ OAuth access-token refreshes are persisted back to the provider record when an a
 
 ## OAuth and credential discovery
 
-`src/lib/oauth.js` implements PKCE browser flows and loopback callbacks. Some providers require the user to paste a callback URL or code into the panel.
+`src/lib/oauth.js` implements PKCE browser flows and loopback callbacks. Some providers require the user to paste a callback URL or code into the panel, dashboard, or interactive terminal setup.
 
-`src/lib/detect.js` performs read-only discovery of supported provider credentials already stored in known local files or the macOS Keychain.
+`src/lib/detect.js` performs read-only discovery of supported provider credentials already stored in known local files or, on macOS, the Keychain.
 
 Selected credentials are copied into ReRouted's config. ReRouted does not continue reading the original source on each request.
 
 ## Persistence
 
-Electron's `userData` directory contains:
+The macOS Electron `userData` directory or Linux `$XDG_CONFIG_HOME/rerouted` directory contains:
 
 | File | Contents |
 | --- | --- |
@@ -122,6 +129,8 @@ On the first `0.4.2` launch, every row still present in the legacy `usage.json` 
 The admin password is scrypt-hashed. Provider credentials and gateway keys are not encrypted at rest.
 
 ## Packaging
+
+The Linux CLI is packaged separately as an npm-compatible tarball named `ReRouted-<version>-linux-node.tgz`, plus the stable alias `ReRouted-linux-node.tgz`; both install the `rerouted` executable. This is intentionally separate from the DMG and native updater path, and the CLI performs no automatic update checks.
 
 `scripts/package-mac-dmg.js` must run on macOS. It:
 
@@ -146,7 +155,7 @@ Packaged builds use Electron's native macOS updater and the public stable GitHub
 
 ## Tests and current gaps
 
-`tests/gateway.test.js` covers password hashing, config persistence, bearer auth, request-size enforcement, model listing, streaming and non-streaming completion paths, fallback, round-robin ordering, timeouts, OAuth request behavior, token refresh, format translation, SSE decoding, multiple gateway keys, disabled models, and usage aggregation.
+`tests/gateway.test.js` covers password hashing, config persistence, bearer auth, request-size enforcement, model listing, streaming and non-streaming completion paths, fallback, round-robin ordering, timeouts, OAuth request behavior, token refresh, format translation, SSE decoding, multiple gateway keys, disabled models, and usage aggregation. `tests/control-plane.test.js`, `tests/dashboard.test.js`, and `tests/cli.test.js` cover the shared action contract, session isolation, redaction, same-origin boundaries, login throttling, asset serving, Linux paths, the process lock, and real headless startup.
 
 Important gaps to keep visible:
 
@@ -159,4 +168,4 @@ Important gaps to keep visible:
 
 ## Maintenance rules
 
-Read [docs/release-checklist.md](release-checklist.md) before changing the app. A merged commit is only one stage of a ReRouted iteration; the DMG and MacBook Air installation are part of the deliverable.
+Read [docs/release-checklist.md](release-checklist.md) before changing the app. A merged commit is only one stage of a ReRouted iteration; the DMG, Linux tarball, and target-system installation checks are part of the deliverable.

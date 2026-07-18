@@ -1,7 +1,8 @@
 {
-  "name": "rerouted",
-  "version": "0.4.18",
-  "description": "A macOS menu-bar router for accounts, models, and automatic fallback.",
+  "name": "@gitcommit90/rerouted",
+  "productName": "ReRouted",
+  "version": "0.5.0",
+  "description": "A local AI router for connected accounts, models, named routes, and automatic fallback.",
   "author": "gitcommit90",
   "license": "MIT",
   "homepage": "https://rerouted.dev",
@@ -13,15 +14,32 @@
     "url": "https://github.com/gitcommit90/rerouted/issues"
   },
   "main": "src/main.js",
-  "private": true,
+  "private": false,
+  "bin": {
+    "rerouted": "src/cli/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src/",
+    "resources/",
+    "LICENSE",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "README.md"
+  ],
   "scripts": {
     "start": "electron .",
+    "start:headless": "node src/cli/index.js",
     "test": "node --test tests/*.test.js",
     "gen-icon": "node scripts/gen-tray-icon.js",
     "package:mac": "electron-packager . ReRouted --platform=darwin --arch=arm64 --out=dist --overwrite --asar --prune --extend-info=scripts/extendInfo.plist --app-bundle-id=dev.rerouted.app --extra-resource=resources/trayTemplate.png --extra-resource=resources/trayTemplate@2x.png",
     "package:dmg": "node scripts/package-mac-dmg.js",
     "package:dmg:release": "REROUTED_REQUIRE_NOTARIZATION=1 node scripts/package-mac-dmg.js",
+    "package:linux": "node scripts/package-linux-cli.js",
     "capture-ui": "electron scripts/capture-ui.js",
+    "capture-dashboard": "electron scripts/capture-dashboard.js",
     "site:serve": "node scripts/serve-site.js",
     "site:capture": "electron scripts/shoot-landing.js",
     "site:social": "electron scripts/shoot-social.js"

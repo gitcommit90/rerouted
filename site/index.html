@@ -10,7 +10,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
 <link rel="canonical" href="https://rerouted.dev/" />
 <meta name="theme-color" content="#ede8dc" />
-<meta name="description" content="A macOS menu-bar router for AI tools. Keep one local endpoint while ReRouted handles accounts, routes, quota limits, timeouts, and retryable provider failures." />
+<meta name="description" content="A local AI router for macOS and Linux. Keep one endpoint while ReRouted handles accounts, routes, quota limits, timeouts, and retryable provider failures." />
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="ReRouted" />
 <meta property="og:title" content="ReRouted - one local endpoint for your AI tools" />
@@ -622,6 +622,9 @@
   }
   .setup-steps li .st-copy h4 { font-family: var(--display); font-weight: 600; font-size: 18px; margin-bottom: 3px; }
   .setup-steps li .st-copy p { font-size: 14.5px; color: var(--muted); line-height: 1.5; }
+  .band-dark .setup-steps li { border-bottom-color: rgba(255,255,255,0.1); }
+  .band-dark .setup-steps li .st-copy h4 { color: #fbf8f0; }
+  .band-dark .setup-steps li .st-copy p { color: rgba(236,232,221,0.62); }
 
   .codeblock {
     background: var(--night);
@@ -738,7 +741,7 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <span class="eyebrow">Local gateway · macOS menu bar</span>
+      <span class="eyebrow">Local gateway · macOS + Linux</span>
       <h1 class="headline">One endpoint.<br />Your run <span class="em">keeps&nbsp;going</span>.</h1>
       <p class="subhead">
         Point a compatible configurable chat-completions client at <b>one local URL</b>.
@@ -750,6 +753,7 @@
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a1 1 0 0 1 1 1v6.09l1.8-1.8a1 1 0 1 1 1.4 1.42l-3.5 3.5a1 1 0 0 1-1.4 0l-3.5-3.5a1 1 0 1 1 1.4-1.42L7 8.59V2.5a1 1 0 0 1 1-1Z"/><path d="M2.5 13a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1Z"/></svg>
           Download for Apple Silicon
         </a>
+        <a class="btn btn-ghost" href="#setup">Install for Linux</a>
         <a class="btn btn-ghost" href="#how">See how it routes</a>
       </div>
       <div class="hero-note"><span class="dot"></span><span>Binds to <code>127.0.0.1</code> by default. No hosted control plane. No ReRouted account. No&nbsp;Dock&nbsp;icon.</span></div>
@@ -830,7 +834,7 @@
       <div class="beat reveal">
         <span class="num">1</span>
         <h3>Connect once</h3>
-        <p>Import supported credentials already stored on your Mac, connect an OAuth account, or paste an API key. Accounts and keys live side by side.</p>
+        <p>Import supported credentials already stored on your machine, connect an OAuth account, or paste an API key. Accounts and keys live side by side.</p>
       </div>
       <div class="beat reveal">
         <span class="num">2</span>
@@ -872,7 +876,7 @@
       <div class="feature reveal">
         <div class="ic"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 4-7 5 6"/><path d="M3 21h18"/></svg></div>
         <h3>Traffic you can see</h3>
-        <p>Requests, failures, token counts, routes, and logs — <b>all in the menu-bar panel</b>. No dashboard tab to keep open.</p>
+        <p>Requests, failures, token counts, routes, and logs — <b>in the menu-bar panel on macOS or the matching dashboard on Linux</b>.</p>
       </div>
       <div class="feature reveal">
         <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9 9 9 0 0 0 9 9"/><path d="M12 3a9 9 0 0 1 9 9"/><circle cx="12" cy="12" r="3.2"/></svg></div>
@@ -881,8 +885,8 @@
       </div>
       <div class="feature reveal">
         <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="16" r="3"/></svg></div>
-        <h3>No desktop bloat</h3>
-        <p>No Dock icon. No frontend framework. <b>Signed updates install from inside the app.</b> It lives quietly in the menu bar.</p>
+        <h3>Native or headless</h3>
+        <p>No Dock icon on macOS. No desktop required on Linux. <b>The same control plane</b> runs as a menu-bar panel or at <code>/dashboard/</code>.</p>
       </div>
     </div>
   </div>
@@ -919,15 +923,20 @@
 <section class="band band-dark" id="setup">
   <div class="wrap setup-grid">
     <div class="reveal">
-      <span class="eyebrow">Three minutes to useful</span>
+      <span class="eyebrow">Mac or Linux · three minutes to useful</span>
       <h2 class="sec-title" style="margin-bottom:26px;">Run one test. <span class="em">Done.</span></h2>
       <ol class="setup-steps">
-        <li><div class="st-copy"><h4>Install &amp; launch</h4><p>Open the Apple Silicon DMG, drag to Applications, launch. Look up — it’s in the menu bar.</p></div></li>
+        <li><div class="st-copy"><h4>Install &amp; launch</h4><p>Open the Apple Silicon DMG, or install the Linux tarball with npm and run <code>rerouted</code>.</p></div></li>
         <li><div class="st-copy"><h4>Connect an account</h4><p>Import local credentials, connect OAuth, or add a key.</p></div></li>
         <li><div class="st-copy"><h4>Point your client here</h4><p>Copy the endpoint and generated <code style="font-family:var(--mono);color:#ffb694">rr-…</code> key from Home.</p></div></li>
       </ol>
     </div>
     <div class="reveal">
+      <div class="codeblock" style="margin-bottom:16px">
+        <div class="cb-top"><i></i><i></i><i></i><span>linux install</span></div>
+<div class="cb-line"><span class="env">npm install --global</span> <span class="val">https://github.com/gitcommit90/rerouted/releases/latest/download/ReRouted-linux-node.tgz</span>
+<span class="env">rerouted</span>  <span class="cmt"># terminal setup + /dashboard/</span></div>
+      </div>
       <div class="codeblock">
         <button class="copy-btn" id="copy-btn">Copy</button>
         <div class="cb-top"><i></i><i></i><i></i><span>smoke test</span></div>
@@ -954,12 +963,13 @@
       <path d="M5 21v-2c0-2.2 1.8-4 4-4" style="stroke: var(--line-strong)" />
     </svg>
     <h2 class="reveal">Connect once. Route on purpose.<br /><span class="em">Stop babysitting provider failures.</span></h2>
-    <p class="reveal">The gateway you keep meaning to build — already sitting in your menu bar.</p>
+    <p class="reveal">The gateway you keep meaning to build — in your menu bar or one headless command.</p>
     <div class="hero-cta reveal">
       <a class="btn btn-primary" href="https://github.com/gitcommit90/rerouted/releases/latest">
         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a1 1 0 0 1 1 1v6.09l1.8-1.8a1 1 0 1 1 1.4 1.42l-3.5 3.5a1 1 0 0 1-1.4 0l-3.5-3.5a1 1 0 1 1 1.4-1.42L7 8.59V2.5a1 1 0 0 1 1-1Z"/><path d="M2.5 13a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1Z"/></svg>
         Download for Apple Silicon
       </a>
+      <a class="btn btn-ghost" href="#setup">Install for Linux</a>
       <a class="btn btn-ghost" href="#how">How it works</a>
     </div>
   </div>
@@ -970,7 +980,7 @@
   <div class="wrap foot-inner">
     <div class="foot-copy">
       <b>ReRouted</b> — a local OpenAI-style chat-completions gateway.<br />
-      <span class="foot-mono">Current stable release · macOS 12+ · Apple Silicon · Developer ID signed · Apple notarized</span><br />
+      <span class="foot-mono">macOS 12+ Apple Silicon · Linux with Node.js 22.13+ · local by default</span><br />
       <span class="foot-mono">An independent personal project.</span>
     </div>
     <div class="foot-links">

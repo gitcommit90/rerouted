@@ -24,11 +24,15 @@ async function verifyPassword(password, stored) {
   if (!stored || typeof stored !== "string") return false;
   const parts = stored.split("$");
   if (parts.length !== 3 || parts[0] !== "scrypt") return false;
-  const salt = Buffer.from(parts[1], "hex");
-  const expected = Buffer.from(parts[2], "hex");
-  if (salt.length === 0 || expected.length === 0) return false;
-  const key = await scryptAsync(String(password), salt, expected.length, SCRYPT_OPTS);
-  return crypto.timingSafeEqual(key, expected);
+  if (!/^[a-f0-9]{32}$/i.test(parts[1]) || !/^[a-f0-9]{128}$/i.test(parts[2])) return false;
+  try {
+    const salt = Buffer.from(parts[1], "hex");
+    const expected = Buffer.from(parts[2], "hex");
+    const key = await scryptAsync(String(password), salt, KEY_LEN, SCRYPT_OPTS);
+    return crypto.timingSafeEqual(key, expected);
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -4,7 +4,7 @@ ReRouted handles OAuth sessions, API keys, gateway keys, and local routing data.
 
 ## Supported versions
 
-Security fixes are provided for the latest stable release. Update through **Settings -> Software updates** or install the newest signed release before reporting a problem that may already be fixed.
+Security fixes are provided for the latest stable release. On macOS, update through **Settings -> Software updates** or install the newest signed release. On Linux, reinstall the current `ReRouted-linux-node.tgz` asset through npm before reporting a problem that may already be fixed.
 
 ## Reporting a vulnerability
 
@@ -14,10 +14,10 @@ Use GitHub's private [Report a vulnerability](https://github.com/gitcommit90/rer
 
 Include only the information needed to investigate:
 
-- ReRouted version and macOS version.
+- ReRouted version, operating system, and installation method.
 - The affected feature and realistic impact.
 - Reproduction steps that use placeholder credentials and sanitized data.
-- Whether the gateway was bound only to localhost or exposed to a network.
+- Whether the gateway/dashboard was bound only to localhost or exposed to a network.
 
 Never include API keys, gateway keys, access or refresh tokens, OAuth authorization codes, callback URLs, cookies, raw `config.json`, full unreviewed logs, account identifiers, or private prompts.
 

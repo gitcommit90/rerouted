@@ -36,6 +36,7 @@ function createGateway({
   let server = null;
   let listeningPort = null;
   let listeningHost = null;
+  let dashboardHandler = null;
 
   function unauthorized(res, anthropic = false) {
     res.writeHead(401, { "Content-Type": "application/json" });
@@ -125,6 +126,15 @@ function createGateway({
     const url = new URL(req.url || "/", `http://${host}`);
     const path = url.pathname.replace(/^\/v1\/v1(?=\/|$)/, "/v1");
     const anthropicPath = path === "/v1/messages" || path === "/v1/messages/count_tokens";
+
+    if (path === "/dashboard" || path.startsWith("/dashboard/")) {
+      if (dashboardHandler && (await dashboardHandler(req, res, { path, url })) !== false) {
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Dashboard unavailable" } }));
+      return;
+    }
 
     // CORS for local tools
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -437,7 +447,31 @@ function createGateway({
     return listeningPort ? `http://127.0.0.1:${listeningPort}/v1` : null;
   }
 
-  return { start, stop, restart, isListening, getAddress, checkAuth, handle, validKeys };
+  function getListeningAddress() {
+    return listeningPort == null
+      ? null
+      : { port: listeningPort, host: listeningHost || resolveHost() };
+  }
+
+  function setDashboardHandler(handler) {
+    if (handler != null && typeof handler !== "function") {
+      throw new TypeError("Dashboard handler must be a function");
+    }
+    dashboardHandler = handler || null;
+  }
+
+  return {
+    start,
+    stop,
+    restart,
+    isListening,
+    getAddress,
+    getListeningAddress,
+    checkAuth,
+    handle,
+    validKeys,
+    setDashboardHandler,
+  };
 }
 
 module.exports = { createGateway, MAX_JSON_BODY_BYTES };
