@@ -6,6 +6,7 @@ const { openaiChunk, formatSseData, SSE_DONE, createSseParser } = require("../ss
 const { applyClaudeEffort } = require("./effort");
 
 const cfg = OAUTH.claude;
+const ANTHROPIC_METADATA = Symbol.for("rerouted.anthropic.metadata");
 
 /** Provider-compatible request metadata and system-block shaping. */
 const CLAUDE_CLI_VERSION = "2.1.92";
@@ -290,6 +291,10 @@ function convertOpenAITools(tools) {
 function contentBlocksFromMessage(msg) {
   const blocks = [];
   if (msg.role === "tool") {
+    const nativeResult = msg[ANTHROPIC_METADATA]?.tool_result || msg.extra_content?.anthropic?.tool_result;
+    if (nativeResult?.type === "tool_result") {
+      return [JSON.parse(JSON.stringify(nativeResult))];
+    }
     let content = msg.content;
     if (content != null && typeof content !== "string") {
       content = JSON.stringify(content);
@@ -303,11 +308,21 @@ function contentBlocksFromMessage(msg) {
   }
 
   if (msg.role === "assistant") {
+    const nativeContent = msg[ANTHROPIC_METADATA]?.content || msg.extra_content?.anthropic?.content;
+    if (Array.isArray(nativeContent)) {
+      return JSON.parse(JSON.stringify(nativeContent));
+    }
     if (typeof msg.content === "string" && msg.content) {
       blocks.push({ type: "text", text: msg.content });
     } else if (Array.isArray(msg.content)) {
       for (const part of msg.content) {
-        if (part?.type === "text" && part.text) blocks.push({ type: "text", text: part.text });
+        if (part?.type === "text" && part.text) {
+          blocks.push({
+            type: "text",
+            text: part.text,
+            ...(part.cache_control ? { cache_control: part.cache_control } : {}),
+          });
+        }
         if (part?.type === "tool_use") {
           blocks.push({
             type: "tool_use",
@@ -333,11 +348,21 @@ function contentBlocksFromMessage(msg) {
   }
 
   // user (and anything else treated as user)
+  const nativeContent = msg[ANTHROPIC_METADATA]?.content || msg.extra_content?.anthropic?.content;
+  if (Array.isArray(nativeContent)) {
+    return JSON.parse(JSON.stringify(nativeContent));
+  }
   if (typeof msg.content === "string") {
     if (msg.content) blocks.push({ type: "text", text: msg.content });
   } else if (Array.isArray(msg.content)) {
     for (const part of msg.content) {
-      if (part?.type === "text" && part.text) blocks.push({ type: "text", text: part.text });
+      if (part?.type === "text" && part.text) {
+        blocks.push({
+          type: "text",
+          text: part.text,
+          ...(part.cache_control ? { cache_control: part.cache_control } : {}),
+        });
+      }
       else if (part?.type === "tool_result") {
         blocks.push({
           type: "tool_result",
@@ -352,9 +377,14 @@ function contentBlocksFromMessage(msg) {
           blocks.push({
             type: "image",
             source: { type: "base64", media_type: m[1], data: m[2] },
+            ...(part.cache_control ? { cache_control: part.cache_control } : {}),
           });
         } else if (/^https?:\/\//i.test(url)) {
-          blocks.push({ type: "image", source: { type: "url", url } });
+          blocks.push({
+            type: "image",
+            source: { type: "url", url },
+            ...(part.cache_control ? { cache_control: part.cache_control } : {}),
+          });
         }
       }
     }
@@ -394,9 +424,30 @@ function toAnthropicBody(body, model, stream) {
 
   for (const m of body.messages || []) {
     if (m.role === "system") {
-      systemParts.push(
-        typeof m.content === "string" ? m.content : JSON.stringify(m.content)
-      );
+      const nativeSystem = m[ANTHROPIC_METADATA]?.content;
+      if (Array.isArray(nativeSystem)) {
+        systemParts.push(...JSON.parse(JSON.stringify(nativeSystem)));
+        continue;
+      }
+      if (typeof nativeSystem === "string") {
+        systemParts.push({ type: "text", text: nativeSystem });
+        continue;
+      }
+      if (typeof m.content === "string") {
+        systemParts.push({ type: "text", text: m.content });
+      } else if (Array.isArray(m.content)) {
+        for (const part of m.content) {
+          if (part?.type === "text" && part.text != null) {
+            systemParts.push({
+              type: "text",
+              text: String(part.text),
+              ...(part.cache_control ? { cache_control: part.cache_control } : {}),
+            });
+          }
+        }
+      } else if (m.content != null) {
+        systemParts.push({ type: "text", text: String(m.content) });
+      }
       continue;
     }
     const blocks = contentBlocksFromMessage(m);
@@ -426,11 +477,26 @@ function toAnthropicBody(body, model, stream) {
     max_tokens: body.max_tokens || body.max_completion_tokens || 4096,
     stream: !!stream,
   };
-  if (systemParts.length) out.system = systemParts.join("\n\n");
+  if (systemParts.length) {
+    out.system = systemParts.some((part) => part.cache_control)
+      ? systemParts
+      : systemParts.map((part) => part.text).join("\n\n");
+  }
   if (body.temperature != null) out.temperature = body.temperature;
+  if (body.top_p != null) out.top_p = body.top_p;
+  if (body.top_k != null) out.top_k = body.top_k;
+  if (body.stop != null) out.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop];
+  for (const key of ["metadata", "service_tier", "context_management", "mcp_servers"]) {
+    if (body[key] !== undefined) out[key] = JSON.parse(JSON.stringify(body[key]));
+  }
 
   const tools = convertOpenAITools(body.tools);
-  if (tools) out.tools = tools;
+  const nativeTools = body[ANTHROPIC_METADATA]?.tools;
+  if (Array.isArray(nativeTools) && nativeTools.length) {
+    out.tools = JSON.parse(JSON.stringify(nativeTools));
+  } else if (tools) {
+    out.tools = tools;
+  }
   // Functions API compatibility
   if (!tools && Array.isArray(body.functions) && body.functions.length) {
     out.tools = body.functions.map((fn) => ({
@@ -447,6 +513,15 @@ function toAnthropicBody(body, model, stream) {
     else if (typeof body.function_call === "object" && body.function_call.name) {
       out.tool_choice = { type: "tool", name: body.function_call.name };
     }
+  }
+  if (body.parallel_tool_calls === false && out.tool_choice?.type !== "none") {
+    out.tool_choice = {
+      ...(out.tool_choice || { type: "auto" }),
+      disable_parallel_tool_use: true,
+    };
+  }
+  for (const [key, value] of Object.entries(body[ANTHROPIC_METADATA]?.options || {})) {
+    out[key] = JSON.parse(JSON.stringify(value));
   }
   return applyClaudeEffort(out, body, model);
 }
@@ -480,6 +555,11 @@ function fromAnthropicJson(data, model) {
     role: "assistant",
     content: text || (toolCalls.length ? null : ""),
   };
+  message[ANTHROPIC_METADATA] = {
+    content: JSON.parse(JSON.stringify(blocks)),
+    stop_reason: data.stop_reason || null,
+    stop_sequence: data.stop_sequence ?? null,
+  };
   if (toolCalls.length) message.tool_calls = toolCalls;
 
   return {
@@ -500,6 +580,12 @@ function fromAnthropicJson(data, model) {
           completion_tokens: data.usage.output_tokens || 0,
           total_tokens:
             (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+          ...(data.usage.cache_read_input_tokens != null
+            ? { cache_read_input_tokens: data.usage.cache_read_input_tokens }
+            : {}),
+          ...(data.usage.cache_creation_input_tokens != null
+            ? { cache_creation_input_tokens: data.usage.cache_creation_input_tokens }
+            : {}),
         }
       : undefined,
   };
@@ -508,12 +594,18 @@ function fromAnthropicJson(data, model) {
 /**
  * Translate Anthropic SSE → OpenAI SSE chunks written to res (incl. tool_calls).
  */
-async function pipeAnthropicSseToOpenAi(upstreamBody, res, model) {
+async function pipeAnthropicSseToOpenAi(
+  upstreamBody,
+  res,
+  model,
+  { preserveAnthropic = false } = {}
+) {
   const parser = createSseParser();
   const id = `chatcmpl-${Date.now()}`;
   let roleSent = false;
   /** @type {Map<number, { index: number, id: string, name: string }>} */
   const toolByBlockIndex = new Map();
+  const opaqueBlockIndexes = new Set();
   let nextToolIndex = 0;
   let streamUsage = null;
 
@@ -557,6 +649,18 @@ async function pipeAnthropicSseToOpenAi(upstreamBody, res, model) {
       }
       if (data.type === "content_block_start") {
         const block = data.content_block;
+        if (
+          preserveAnthropic &&
+          (block?.type === "thinking" || block?.type === "redacted_thinking")
+        ) {
+          opaqueBlockIndexes.add(data.index);
+          res.write(formatSseData(openaiChunk({
+            id,
+            model,
+            extra_content: { anthropic: { event: data } },
+          })));
+          continue;
+        }
         if (block?.type === "tool_use") {
           if (!roleSent) {
             res.write(formatSseData(openaiChunk({ id, model, role: "assistant" })));
@@ -588,6 +692,14 @@ async function pipeAnthropicSseToOpenAi(upstreamBody, res, model) {
       }
       if (data.type === "content_block_delta") {
         const delta = data.delta;
+        if (preserveAnthropic && opaqueBlockIndexes.has(data.index)) {
+          res.write(formatSseData(openaiChunk({
+            id,
+            model,
+            extra_content: { anthropic: { event: data } },
+          })));
+          continue;
+        }
         if (delta?.type === "text_delta" && delta.text) {
           if (!roleSent) {
             res.write(formatSseData(openaiChunk({ id, model, role: "assistant", content: "" })));
@@ -616,9 +728,32 @@ async function pipeAnthropicSseToOpenAi(upstreamBody, res, model) {
           }
         }
       }
+      if (
+        preserveAnthropic &&
+        data.type === "content_block_stop" &&
+        opaqueBlockIndexes.has(data.index)
+      ) {
+        res.write(formatSseData(openaiChunk({
+          id,
+          model,
+          extra_content: { anthropic: { event: data } },
+        })));
+        opaqueBlockIndexes.delete(data.index);
+      }
       if (data.type === "message_delta" && data.delta?.stop_reason) {
         const fr = mapStopReason(data.delta.stop_reason);
-        res.write(formatSseData(openaiChunk({ id, model, finishReason: fr })));
+        res.write(formatSseData(openaiChunk({
+          id,
+          model,
+          finishReason: fr,
+          ...(preserveAnthropic
+            ? {
+                extra_content: {
+                  anthropic: { stop_sequence: data.delta.stop_sequence ?? null },
+                },
+              }
+            : {}),
+        })));
       }
     }
   }

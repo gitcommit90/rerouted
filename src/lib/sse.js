@@ -4,11 +4,12 @@
  * Minimal SSE helpers for OpenAI chat.completion.chunk passthrough / synthesis.
  */
 
-function openaiChunk({ id, model, content, finishReason = null, role, tool_calls }) {
+function openaiChunk({ id, model, content, finishReason = null, role, tool_calls, extra_content }) {
   const delta = {};
   if (role) delta.role = role;
   if (content !== undefined && content !== null) delta.content = content;
   if (tool_calls) delta.tool_calls = tool_calls;
+  if (extra_content) delta.extra_content = extra_content;
   return {
     id: id || `chatcmpl-${Date.now()}`,
     object: "chat.completion.chunk",
