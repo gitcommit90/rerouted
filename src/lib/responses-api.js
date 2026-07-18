@@ -125,7 +125,12 @@ function validateInputItem(item, param) {
   }
   if (item.type === "custom_tool_call_output") {
     if (typeof item.call_id !== "string" || !item.call_id) throw invalid("custom_tool_call_output requires call_id", `${param}.call_id`);
-    if (typeof item.output !== "string") throw invalid("custom_tool_call_output output must be a string", `${param}.output`);
+    if (!(typeof item.output === "string" || Array.isArray(item.output))) {
+      throw invalid("custom_tool_call_output requires string or array output", `${param}.output`);
+    }
+    if (Array.isArray(item.output)) {
+      item.output.forEach((part, index) => validateContentPart(part, `${param}.output[${index}]`));
+    }
     return;
   }
   if (item.type !== undefined && item.type !== "message") throw invalid("Unsupported input item", `${param}.type`);
@@ -178,7 +183,9 @@ function inputMessages(input) {
       messages.push({
         role: "tool",
         tool_call_id: item.call_id,
-        content: textContent(item.output),
+        content: item.type === "custom_tool_call_output" && Array.isArray(item.output)
+          ? JSON.parse(JSON.stringify(item.output))
+          : textContent(item.output),
         ...(item.type === "custom_tool_call_output" ? { extra_content: { openai: { custom_tool_call_output: true } } } : {}),
       });
       continue;

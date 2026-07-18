@@ -77,13 +77,17 @@ describe("ChatGPT Responses tool translation", () => {
     ];
     const first = chatgpt.toResponsesBody({ messages: [{ role: "user", content: "List files" }], tools: additionalTools }, "gpt-5.6-sol", false);
     assert.deepEqual(first.tools, additionalTools);
+    const output = [
+      { type: "input_text", text: "Script completed..." },
+      { type: "input_text", text: "{...TOOL_EXEC_OK...}" },
+    ];
     const second = chatgpt.toResponsesBody({ messages: [
-      { role: "assistant", content: null, tool_calls: [{ id: "call_exec", type: "custom", custom: { name: "exec", input: "ls" } }] },
-      { role: "tool", tool_call_id: "call_exec", content: "a.js", extra_content: { openai: { custom_tool_call_output: true } } },
+      { role: "assistant", content: null, tool_calls: [{ id: "call_capture", type: "custom", custom: { name: "exec", input: "ls" } }] },
+      { role: "tool", tool_call_id: "call_capture", content: output, extra_content: { openai: { custom_tool_call_output: true } } },
     ], tools: additionalTools }, "gpt-5.6-sol", false);
     assert.deepEqual(second.input, [
-      { type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "ls" },
-      { type: "custom_tool_call_output", call_id: "call_exec", output: "a.js" },
+      { type: "custom_tool_call", call_id: "call_capture", name: "exec", input: "ls" },
+      { type: "custom_tool_call_output", call_id: "call_capture", output },
     ]);
     assert.deepEqual(second.tools, additionalTools);
   });

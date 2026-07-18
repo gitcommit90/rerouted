@@ -141,7 +141,9 @@ function toResponsesInput(messages, model, reasoningScope) {
       input.push({
         type: message.extra_content?.openai?.custom_tool_call_output ? "custom_tool_call_output" : "function_call_output",
         call_id: message.tool_call_id,
-        output: textFromOpenAiContent(message.content),
+        output: message.extra_content?.openai?.custom_tool_call_output && Array.isArray(message.content)
+          ? JSON.parse(JSON.stringify(message.content))
+          : textFromOpenAiContent(message.content),
       });
       continue;
     }
