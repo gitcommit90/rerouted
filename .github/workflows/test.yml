@@ -9,8 +9,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -23,5 +28,15 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Diff whitespace check
+        run: git diff --check
       - name: Run tests
         run: npm test
+      - name: Package metadata sanity
+        run: |
+          node -e "const p=require('./package.json'); if(!p.version) process.exit(1); if(p.license!=='MIT') process.exit(1); console.log('version', p.version)"
+          test -f LICENSE
+          test -f CHANGELOG.md
+          test -f docs/release-checklist.md
+          test -f docs/release-lifecycle.md
+          test -f docs/GOVERNANCE.md
