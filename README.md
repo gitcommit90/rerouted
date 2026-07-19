@@ -238,6 +238,8 @@ See [Privacy](./PRIVACY.md) for the local files ReRouted keeps, the network serv
 - For questions, reproducible bugs, and feature requests, use [GitHub Issues](https://github.com/gitcommit90/rerouted/issues).
 - For a suspected vulnerability, follow [the security policy](./SECURITY.md) and do not post credentials or sensitive details in a public issue.
 - Before sharing diagnostics, remove API keys, gateway keys, OAuth callback URLs or codes, account identifiers, email addresses, and any provider response that may contain private data.
+- What shipped: [CHANGELOG.md](./CHANGELOG.md) and [GitHub Releases](https://github.com/gitcommit90/rerouted/releases).
+- How this repo is run: [Governance](./docs/GOVERNANCE.md), [Release lifecycle](./docs/release-lifecycle.md), and the packaging [release checklist](./docs/release-checklist.md).
 
 ReRouted is open source under the [MIT License](./LICENSE). External code contributions are not currently accepted while the contribution process is finalized; focused issues and sanitized reproduction reports are welcome. See [Contributing](./CONTRIBUTING.md) for the current policy.
 

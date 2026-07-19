@@ -1,0 +1,30 @@
+# GitHub-generated release notes categories (Settings → Releases uses this file).
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - duplicate
+      - invalid
+  categories:
+    - title: Breaking changes
+      labels:
+        - breaking
+    - title: Features
+      labels:
+        - enhancement
+        - feature
+    - title: Fixes
+      labels:
+        - bug
+        - fix
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Maintenance
+      labels:
+        - chore
+        - ci
+        - dependencies
+    - title: Other
+      labels:
+        - "*"

@@ -1,12 +1,14 @@
 # Release checklist
 
-This is the required finish line for every ReRouted change, including fixes, features, refactors, UI adjustments, and documentation iterations. Releases that include the headless runtime must verify both the macOS artifacts and Linux CLI package.
+This is the required finish line for every **shipped** ReRouted product build (macOS app and/or Linux CLI). Process and policy live in [release-lifecycle.md](./release-lifecycle.md) and [GOVERNANCE.md](./GOVERNANCE.md). User-facing narrative belongs in [CHANGELOG.md](../CHANGELOG.md) before you package.
 
-**Do not say "done" until every check has passed.**
+Docs-only or governance-only merges may land without a new binary, but they still use a branch, tests when applicable, and changelog Unreleased notes when users will notice.
+
+**Do not say "done" for a product release until every check below has passed.**
 
 ## 1. Prepare the change
 
-Start from the current remote `main`, create a branch, and give the app a new version so the installed build is unambiguous.
+Start from the current remote `main`, create a branch, implement with tests, and update `CHANGELOG.md` under Unreleased. Give the app a new version so the installed build is unambiguous before packaging.
 
 ```bash
 git fetch origin
@@ -14,7 +16,9 @@ git switch main
 git pull --ff-only origin main
 git switch -c <branch-name>
 
+# After implementation and tests, when this branch will ship:
 npm version patch --no-git-tag-version
+# Move Unreleased notes into ## [x.y.z] - YYYY-MM-DD in CHANGELOG.md
 ```
 
 Use a minor or major bump when the scope warrants it. Do not reuse an already-installed version for a new iteration.
