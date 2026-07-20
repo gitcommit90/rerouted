@@ -15,6 +15,7 @@ const { extractUsage } = require("./usage");
 const appLogger = require("./logger");
 const { canonicalProviderType, isOAuthProvider, getActiveModelLock } = require("./store");
 const { publicComboId, comboMatchesId } = require("./combos");
+const { isCustomProviderType } = require("./model-ids");
 const { createSseParser } = require("./sse");
 const ANTHROPIC_METADATA = Symbol.for("rerouted.anthropic.metadata");
 
@@ -60,14 +61,20 @@ function providerHasModel(provider, upstreamModel) {
   );
 }
 
+function isAccountPoolProvider(provider) {
+  return !!provider && !isCustomProviderType(provider.type);
+}
+
 function accountCandidatesFor(cfg, preferredProvider, upstreamModel, { preferRequested = true } = {}) {
-  if (!preferredProvider || !isOAuthProvider(preferredProvider)) return preferredProvider ? [preferredProvider] : [];
+  if (!preferredProvider || !isAccountPoolProvider(preferredProvider)) {
+    return preferredProvider ? [preferredProvider] : [];
+  }
   const family = canonicalProviderType(preferredProvider.type);
   const candidates = (cfg.providers || [])
     .filter(
       (provider) =>
         provider.enabled !== false &&
-        isOAuthProvider(provider) &&
+        isAccountPoolProvider(provider) &&
         canonicalProviderType(provider.type) === family &&
         providerHasModel(provider, upstreamModel)
     )
@@ -95,11 +102,24 @@ function resolveTargets(cfg, modelId) {
         if (typeof m === "string") {
           return resolveSingle(cfg, m);
         }
+        const mid = m.model || m.upstreamModel;
+        if (m.providerType) {
+          const family = canonicalProviderType(m.providerType);
+          const prov = (cfg.providers || [])
+            .filter(
+              (p) =>
+                p.enabled !== false &&
+                isAccountPoolProvider(p) &&
+                canonicalProviderType(p.type) === family &&
+                providerHasModel(p, mid)
+            )
+            .sort(compareAccounts)[0];
+          return prov ? makeMember(cfg, prov, mid, { preferRequested: false }) : null;
+        }
         const prov = (cfg.providers || []).find((p) => p.id === m.providerId);
         if (!prov || prov.enabled === false) return null;
         // Skip disabled models on the provider
         const models = prov.models || [];
-        const mid = m.model || m.upstreamModel;
         const modelEntry = models.find((x) => (typeof x === "string" ? x : x.id) === mid);
         if (modelEntry && typeof modelEntry !== "string" && modelEntry.enabled === false) {
           return null;

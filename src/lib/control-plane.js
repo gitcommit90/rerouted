@@ -386,9 +386,14 @@ handle("app:test-keyed-provider", async (_e, payload) => {
 
 handle("app:remove-provider", async (_e, id) => {
   store.update((cfg) => {
+    const removed = cfg.providers.find((p) => p.id === id);
     cfg.providers = cfg.providers.filter((p) => p.id !== id);
     for (const c of cfg.combos) {
-      c.members = (c.members || []).filter((m) => m.providerId !== id);
+      // Provider/model members are account-agnostic. Removing one account
+      // leaves the route intact when another account for that provider remains.
+      if (isCustomProviderType(removed?.type)) {
+        c.members = (c.members || []).filter((m) => m?.providerId !== id);
+      }
     }
   });
   return { ok: true };

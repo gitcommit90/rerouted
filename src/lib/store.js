@@ -10,10 +10,10 @@ const {
   OAUTH_MODEL_RENAMES,
 } = require("./constants");
 const { ensureUniqueComboNames, providerRouteIds } = require("./combos");
-const { ensureUniqueCustomConnectionNames } = require("./model-ids");
+const { ensureUniqueCustomConnectionNames, isCustomProviderType } = require("./model-ids");
 const { backfillTokenIdentity } = require("./oauth-identity");
 
-const CONFIG_VERSION = 8;
+const CONFIG_VERSION = 9;
 const COMBO_NAME_MIGRATION_VERSION = 5;
 const XAI_LOCK_RESET_VERSION = 6;
 const RETIRED_OAUTH_CLEANUP_VERSION = 8;
@@ -233,12 +233,28 @@ function migrate(cfg) {
   ensureUniqueCustomConnectionNames(cfg.providers, cfg.combos);
   const providerById = new Map((cfg.providers || []).map((provider) => [provider.id, provider]));
   for (const combo of cfg.combos) {
-    for (const member of combo.members || []) {
+    const seenMembers = new Set();
+    combo.members = (combo.members || []).flatMap((member) => {
+      if (!member || typeof member !== "object") return [member];
       const provider = providerById.get(member.providerId);
       const family = canonicalProviderType(provider?.type);
       const rename = OAUTH_MODEL_RENAMES[family]?.[member.model];
       if (rename) member.model = rename;
-    }
+      // Named routes describe a provider/model destination. Credentials are an
+      // implementation detail: every matching account is tried before the
+      // route advances. Custom endpoints remain connection-scoped because
+      // their base URLs can be different services.
+      if (provider && !isCustomProviderType(provider.type)) {
+        delete member.providerId;
+        member.providerType = family;
+      } else if (member.providerType) {
+        member.providerType = canonicalProviderType(member.providerType);
+      }
+      const key = `${member.providerType || member.providerId || ""}::${member.model || member.upstreamModel || ""}`;
+      if (!key || seenMembers.has(key)) return [];
+      seenMembers.add(key);
+      return [member];
+    });
   }
   if (needsComboNameMigration) {
     ensureUniqueComboNames(cfg.combos, providerRouteIds(cfg.providers));

@@ -1,20 +1,28 @@
 "use strict";
 
 const { KEYED_PRESETS } = require("../lib/constants");
+const { isCustomProviderType } = require("../lib/model-ids");
 
 const OAUTH_NOTICE =
   "Subscription OAuth sessions are not officially licensed for router use and may carry account risk.";
 
 function publicModelOptions(state) {
   const options = [];
+  const seen = new Set();
   for (const provider of state.providers || []) {
     if (provider.enabled === false) continue;
+    const providerType = provider.type === "codex" ? "chatgpt" : provider.type;
+    const connectionScoped = isCustomProviderType(provider.type);
     for (const model of provider.models || []) {
       if (model.enabled === false) continue;
+      const modelId = model.id;
+      const key = `${connectionScoped ? provider.id : providerType}::${modelId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       options.push({
-        label: `${provider.name}${provider.accountAlias ? ` · ${provider.accountAlias}` : ""}: ${model.name || model.id}`,
-        providerId: provider.id,
-        model: model.id,
+        label: `${connectionScoped ? provider.name : providerType === "chatgpt" ? "ChatGPT" : provider.name}: ${model.name || modelId}`,
+        ...(connectionScoped ? { providerId: provider.id } : { providerType }),
+        model: modelId,
       });
     }
   }
@@ -131,7 +139,9 @@ async function createRoute(prompts, invoke, output) {
     name,
     strategy: strategyIndex === 1 ? "round-robin" : "fallback",
     members: indexes.map((index) => ({
-      providerId: models[index].providerId,
+      ...(models[index].providerType
+        ? { providerType: models[index].providerType }
+        : { providerId: models[index].providerId }),
       model: models[index].model,
     })),
   });

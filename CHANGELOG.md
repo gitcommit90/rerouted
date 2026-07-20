@@ -9,6 +9,13 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-07-20
+
+### Changed
+
+- Routes now select Provider, then Model instead of exposing individual accounts. ReRouted tries all eligible accounts for that provider/model before advancing to the next fallback or round-robin member.
+- Existing standard-provider route members migrate to provider/model destinations; custom OpenAI-compatible endpoints remain connection-specific.
+
 ## [0.5.6] - 2026-07-20
 
 ### Fixed
@@ -81,7 +88,8 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 See [GitHub Releases](https://github.com/gitcommit90/rerouted/releases) for artifact digests and notes prior to the Keep a Changelog narrative. Notable themes in late 0.4.x included signed/notarized distribution, in-app updates, named routes, OAuth account pools, OpenAI chat completions and Responses routing, and launch hardening.
 
-[Unreleased]: https://github.com/gitcommit90/rerouted/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/gitcommit90/rerouted/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.7
 [0.5.5]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.5
 [0.5.4]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.4
 [0.5.3]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.3

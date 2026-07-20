@@ -86,7 +86,7 @@ describe("OAuth catalog migration", () => {
       combos: [],
     });
 
-    assert.equal(cfg.version, 8);
+    assert.equal(cfg.version, 9);
     assert.equal(
       cfg.providers[0].models.some((model) => model.id === "claude-sonnet-4-6"),
       false
@@ -193,7 +193,7 @@ describe("OAuth catalog migration", () => {
       combos: [],
     });
 
-    assert.equal(migrated.version, 8);
+    assert.equal(migrated.version, 9);
     assert.deepEqual(migrated.providers[0].modelLocks, {});
     assert.deepEqual(migrated.providers[1].modelLocks, { "*": oldLock });
 
@@ -215,5 +215,32 @@ describe("OAuth catalog migration", () => {
     const next = migrate(cfg);
     assert.equal(next.providers[0].accountAlias, "oauth8");
     assert.equal(next.providerAliasCounters.xai, 8);
+  });
+
+  it("upgrades standard route members to provider/model destinations", () => {
+    const cfg = migrate({
+      version: 8,
+      providers: [
+        { id: "prov_xai_a", type: "xai", models: ["grok-4.5"] },
+        { id: "prov_xai_b", type: "xai", models: ["grok-4.5"] },
+        { id: "prov_custom", type: "openai-compat", name: "Lab", models: ["local-model"] },
+      ],
+      combos: [
+        {
+          id: "provider-first",
+          members: [
+            { providerId: "prov_xai_a", model: "grok-4.5" },
+            { providerId: "prov_xai_b", model: "grok-4.5" },
+            { providerId: "prov_custom", model: "local-model" },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(cfg.version, 9);
+    assert.deepEqual(cfg.combos[0].members, [
+      { providerType: "xai", model: "grok-4.5" },
+      { providerId: "prov_custom", model: "local-model" },
+    ]);
   });
 });
