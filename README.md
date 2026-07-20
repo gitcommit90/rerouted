@@ -89,7 +89,7 @@ Timeouts and retryable `408`, `429`, and `5xx` responses can advance the route. 
 - **API-key presets:** OpenRouter, NVIDIA NIM, Cloudflare, and GLM Coding.
 - **Custom upstreams:** any service that exposes the OpenAI chat-completions shape ReRouted expects.
 - **Local credential discovery:** supported credentials already stored in known files, or in the macOS Keychain where available, can be imported instead of re-entered.
-- **Multiple accounts:** connect more than one account for the same provider and use shared or account-specific model routes.
+- **Multiple accounts:** connect more than one account for the same provider. Routes select Provider then Model; ReRouted tries every eligible account for that provider/model before advancing to the next route member.
 
 OAuth accounts and keyed providers can live in the same route. ReRouted handles request translation and normalizes supported upstream responses back into the shape your client expects.
 
@@ -192,7 +192,7 @@ ReRouted accepts both `/v1/messages` and `/v1/v1/messages`, so current Claude Co
 
 - **Status:** gateway health, endpoint, latest route, and recent traffic.
 - **Accounts:** OAuth sessions, imported credentials, API keys, and model availability.
-- **Routes:** named fallback or round-robin model groups with explicit ordering controls.
+- **Routes:** named fallback or round-robin provider/model groups with explicit ordering controls; same-provider accounts stay inside the member’s automatic fallback pool.
 - **Activity:** requests, failures, token counts, route choices, and account usage.
 - **Quota:** provider-specific subscription windows where supported.
 - **Settings:** gateway keys, localhost or network binding, security controls, and platform-appropriate startup/update information.

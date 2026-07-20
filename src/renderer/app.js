@@ -7,8 +7,13 @@ const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
 const { buildEnabledProviderGroups, buildProviderCatalog, canonicalProviderType } =
   window.ReroutedProviderCatalog;
-const { buildRouteAccountOptions, modelsForRouteAccount, moveRouteMember } =
-  window.ReroutedRoutePicker;
+const {
+  buildRouteProviderOptions,
+  modelsForRouteProvider,
+  routeMemberForProvider,
+  normalizeRouteMember,
+  moveRouteMember,
+} = window.ReroutedRoutePicker;
 const { oauthPrompt } = window.ReroutedOAuthPrompt;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
@@ -820,7 +825,7 @@ function renderTutorial() {
 }
 
 function renderFirstCombo() {
-  const models = flatModels();
+  const providers = buildRouteProviderOptions(state.providers || []);
   const draft = onboardingDraft.firstCombo;
   view.innerHTML = `
     ${stepProgress("first-combo")}
@@ -835,11 +840,18 @@ function renderFirstCombo() {
     <div class="label">Members</div>
     <div class="member-pick">
       ${
-        models.length
-          ? models
-              .map(
-                (m) =>
-                  `<label class="check-item"><input type="checkbox" data-pid="${esc(m.providerId)}" data-model="${esc(m.upstreamModel)}" ${draft.members.has(memberKey({ providerId: m.providerId, model: m.upstreamModel })) ? "checked" : ""} /><div><div class="card-title ellip">${esc(m.name || m.upstreamModel)}</div><div class="card-sub mono">${esc(m.id)}</div></div></label>`
+        providers.length
+          ? providers
+              .flatMap((provider) =>
+                provider.models.map((model) => {
+                  const member = routeMemberForProvider(provider, model.upstreamModel);
+                  const accountNote = provider.connectionScoped
+                    ? "This connection"
+                    : provider.accountCount > 1
+                      ? `${provider.accountCount} accounts · tries each before the next member`
+                      : "1 connected account";
+                  return `<label class="check-item"><input type="checkbox" data-provider-type="${esc(member.providerType || "")}" data-provider-id="${esc(member.providerId || "")}" data-model="${esc(member.model)}" ${draft.members.has(memberKey(member)) ? "checked" : ""} /><div><div class="card-title ellip">${esc(provider.name)} · ${esc(model.name || model.upstreamModel)}</div><div class="card-sub mono">${esc(model.upstreamModel)} · ${esc(accountNote)}</div></div></label>`;
+                })
               )
               .join("")
           : `<div class="empty">No models yet — add a provider first.</div>`
@@ -856,7 +868,10 @@ function renderFirstCombo() {
   };
   view.querySelectorAll(".member-pick input").forEach((input) => {
     input.onchange = () => {
-      const key = memberKey({ providerId: input.dataset.pid, model: input.dataset.model });
+      const member = input.dataset.providerType
+        ? { providerType: input.dataset.providerType, model: input.dataset.model }
+        : { providerId: input.dataset.providerId, model: input.dataset.model };
+      const key = memberKey(member);
       if (input.checked) draft.members.add(key);
       else draft.members.delete(key);
     };
@@ -871,10 +886,11 @@ function renderFirstCombo() {
   wireOnboardingBack({ tutorial: true });
   $("#btn-skip").onclick = () => finishOnboarding();
   $("#btn-create").onclick = async () => {
-    const members = [...view.querySelectorAll(".member-pick input:checked")].map((el) => ({
-      providerId: el.dataset.pid,
-      model: el.dataset.model,
-    }));
+    const members = [...view.querySelectorAll(".member-pick input:checked")].map((el) =>
+      el.dataset.providerType
+        ? { providerType: el.dataset.providerType, model: el.dataset.model }
+        : { providerId: el.dataset.providerId, model: el.dataset.model }
+    );
     const name = $("#c-name").value.trim();
     if (!name) return toast("Enter a model ID");
     if (!members.length) return toast("Pick at least one model");
@@ -1729,7 +1745,7 @@ function renderProviders() {
 }
 
 function memberKey(m) {
-  return `${m.providerId}::${m.model || m.upstreamModel}`;
+  return `${m.providerType || m.providerId}::${m.model || m.upstreamModel}`;
 }
 
 let comboDraft = null;
@@ -1739,10 +1755,12 @@ function beginComboEdit(combo) {
     id: combo?.storageId || combo?.id || null,
     name: combo?.name || "",
     strategy: combo?.strategy || "fallback",
-    pickerAccountId: null,
+    pickerProviderId: null,
     pickerModelId: null,
     members: (combo?.members || []).map((member) => ({
-      providerId: member.providerId,
+      ...(member.providerType
+        ? { providerType: canonicalProviderType(member.providerType) }
+        : { providerId: member.providerId }),
       model: member.model || member.upstreamModel,
     })),
   };
@@ -1766,30 +1784,33 @@ function syncComboDraft() {
   if (name) comboDraft.name = name.value;
 }
 
-function comboMemberInfo(member, models) {
-  return models.find(
-    (model) => model.providerId === member.providerId && model.upstreamModel === member.model
+function comboMemberInfo(member, providers) {
+  const normalized = normalizeRouteMember(member, providers);
+  const provider = providers.find((entry) =>
+    normalized.providerType
+      ? entry.providerType === normalized.providerType && !entry.connectionScoped
+      : entry.providerId === normalized.providerId
   );
+  const model = provider?.models.find((entry) => entry.upstreamModel === normalized.model);
+  return { member: normalized, provider, model };
 }
 
-function routeAccountLabel(account) {
-  if (account.accountAlias) return `${account.name} · ${aliasLabel(account.accountAlias)}`;
-  if (account.connectionCount > 1) return `${account.name} · Connection ${account.connectionIndex}`;
-  return account.name;
+function routeProviderLabel(provider) {
+  if (!provider) return "Provider";
+  return provider.name;
 }
 
 function renderCombos(options = {}) {
   if (blockSensitiveRenderIfLocked()) return;
   const combos = state.combos || [];
-  const models = flatModels();
-  const accounts = buildRouteAccountOptions(state.providers || []);
+  const providers = buildRouteProviderOptions(state.providers || []);
   const editor = comboDraft;
-  if (editor && !accounts.some((account) => account.id === editor.pickerAccountId)) {
-    editor.pickerAccountId = null;
+  if (editor && !providers.some((provider) => provider.id === editor.pickerProviderId)) {
+    editor.pickerProviderId = null;
     editor.pickerModelId = null;
   }
   const pickerModels = editor
-    ? modelsForRouteAccount(accounts, editor.pickerAccountId)
+    ? modelsForRouteProvider(providers, editor.pickerProviderId)
     : [];
   if (
     editor?.pickerModelId &&
@@ -1842,12 +1863,19 @@ function renderCombos(options = {}) {
           editor.members.length
             ? editor.members
                 .map((member, index) => {
-                  const info = comboMemberInfo(member, models);
+                  const info = comboMemberInfo(member, providers);
+                  const providerName = info.provider?.name || member.providerType || "Provider";
+                  const accountCount = info.model?.accountCount || info.provider?.accountCount || 0;
+                  const accountNote = info.provider?.connectionScoped
+                    ? "This connection"
+                    : accountCount > 1
+                      ? `Tries ${accountCount} accounts before the next member`
+                      : "Uses the connected account";
                   return `<div class="member-row" draggable="true" data-member-index="${index}">
                     <div class="member-drag" aria-hidden="true"><span></span><span></span><span></span></div>
                     <div class="member-index">${index + 1}</div>
-                    <div class="ellip"><div class="row-title">${esc(info?.name || member.model)}</div><div class="model-id">${esc(info?.id || member.model)}</div></div>
-                    <div class="member-actions"><button type="button" data-member-up="${index}" title="Move up" aria-label="Move ${esc(info?.name || member.model)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-member-down="${index}" title="Move down" aria-label="Move ${esc(info?.name || member.model)} down" ${index === editor.members.length - 1 ? "disabled" : ""}>↓</button><button type="button" data-member-remove="${index}" title="Remove" aria-label="Remove ${esc(info?.name || member.model)}">×</button></div>
+                    <div class="ellip"><div class="row-title">${esc(providerName)} · ${esc(info.model?.name || member.model)}</div><div class="model-id">${esc(info.model?.upstreamModel || member.model)} · ${esc(accountNote)}</div></div>
+                    <div class="member-actions"><button type="button" data-member-up="${index}" title="Move up" aria-label="Move ${esc(info.model?.name || member.model)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-member-down="${index}" title="Move down" aria-label="Move ${esc(info.model?.name || member.model)} down" ${index === editor.members.length - 1 ? "disabled" : ""}>↓</button><button type="button" data-member-remove="${index}" title="Remove" aria-label="Remove ${esc(info.model?.name || member.model)}">×</button></div>
                   </div>`;
                 })
                 .join("")
@@ -1855,10 +1883,11 @@ function renderCombos(options = {}) {
         }
       </div>
       <div class="route-member-picker">
-        <label class="route-picker-field" for="c-add-account"><span class="label">Account</span><select class="select" id="c-add-account"><option value="">Choose an account…</option>${accounts.map((account) => `<option value="${esc(account.id)}" ${account.id === editor.pickerAccountId ? "selected" : ""}>${esc(routeAccountLabel(account))}</option>`).join("")}</select></label>
-        <label class="route-picker-field" for="c-add-model"><span class="label">Model</span><select class="select" id="c-add-model" ${editor.pickerAccountId ? "" : "disabled"}><option value="">${editor.pickerAccountId ? "Choose a model…" : "Choose an account first…"}</option>${pickerModels.map((model) => `<option value="${esc(model.upstreamModel)}" ${model.upstreamModel === editor.pickerModelId ? "selected" : ""}>${esc(model.name)} · ${esc(model.upstreamModel)}</option>`).join("")}</select></label>
-        <button type="button" class="btn btn-secondary btn-sm route-picker-add" id="btn-add-member" ${editor.pickerAccountId && editor.pickerModelId ? "" : "disabled"}>Add to route</button>
+        <label class="route-picker-field" for="c-add-provider"><span class="label">Provider</span><select class="select" id="c-add-provider"><option value="">Choose a provider…</option>${providers.map((provider) => `<option value="${esc(provider.id)}" ${provider.id === editor.pickerProviderId ? "selected" : ""}>${esc(routeProviderLabel(provider))}</option>`).join("")}</select></label>
+        <label class="route-picker-field" for="c-add-model"><span class="label">Model</span><select class="select" id="c-add-model" ${editor.pickerProviderId ? "" : "disabled"}><option value="">${editor.pickerProviderId ? "Choose a model…" : "Choose a provider first…"}</option>${pickerModels.map((model) => `<option value="${esc(model.upstreamModel)}" ${model.upstreamModel === editor.pickerModelId ? "selected" : ""}>${esc(model.name)} · ${esc(model.upstreamModel)}</option>`).join("")}</select></label>
+        <button type="button" class="btn btn-secondary btn-sm route-picker-add" id="btn-add-member" ${editor.pickerProviderId && editor.pickerModelId ? "" : "disabled"}>Add to route</button>
       </div>
+      <div class="route-picker-note">When a provider has multiple accounts, ReRouted tries that model on every eligible account before moving to the next route member.</div>
       <div class="btn-row"><button type="button" class="btn btn-secondary" id="btn-cancel-edit">Back to routes</button><button type="button" class="btn btn-primary" id="btn-create">${editor.id ? "Save route" : "Create route"}</button></div>
     </section>`
     : "";
@@ -1966,30 +1995,31 @@ function renderCombos(options = {}) {
       renderCombos();
     };
   });
-  $("#c-add-account").onchange = () => {
+  $("#c-add-provider").onchange = () => {
     syncComboDraft();
-    editor.pickerAccountId = $("#c-add-account").value || null;
+    editor.pickerProviderId = $("#c-add-provider").value || null;
     editor.pickerModelId = null;
     renderCombos();
   };
   $("#c-add-model").onchange = () => {
     editor.pickerModelId = $("#c-add-model").value || null;
-    $("#btn-add-member").disabled = !editor.pickerAccountId || !editor.pickerModelId;
+    $("#btn-add-member").disabled = !editor.pickerProviderId || !editor.pickerModelId;
   };
   $("#btn-add-member").onclick = () => {
     syncComboDraft();
-    if (!editor.pickerAccountId) return toast("Choose an account");
+    if (!editor.pickerProviderId) return toast("Choose a provider");
     if (!editor.pickerModelId) return toast("Choose a model");
     const model = pickerModels.find(
       (item) => item.upstreamModel === editor.pickerModelId
     );
-    if (!model) return toast("Choose a model");
-    const member = { providerId: model.providerId, model: model.upstreamModel };
+    const provider = providers.find((item) => item.id === editor.pickerProviderId);
+    if (!provider || !model) return toast("Choose a model");
+    const member = routeMemberForProvider(provider, model.upstreamModel);
     if (editor.members.some((item) => memberKey(item) === memberKey(member))) {
       return toast("That model is already in the route");
     }
     editor.members.push(member);
-    editor.pickerAccountId = null;
+    editor.pickerProviderId = null;
     editor.pickerModelId = null;
     renderCombos();
   };

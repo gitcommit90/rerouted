@@ -710,6 +710,126 @@ describe("same-provider OAuth account fallback", () => {
     assert.deepEqual(calls, ["token-b", "backup-key"]);
   });
 
+  it("exhausts every account for a provider/model member before its route fallback", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({
+      providers: [
+        oauthAccount("prov_a", "token-a", 100),
+        oauthAccount("prov_b", "token-b", 200),
+        {
+          id: "prov_backup",
+          type: "openai-compat",
+          name: "Backup",
+          baseUrl: "https://backup.test/v1",
+          apiKey: "backup-key",
+          enabled: true,
+          models: [{ id: "backup-model", name: "Backup model", enabled: true }],
+        },
+      ],
+      combos: [
+        {
+          id: "provider-first",
+          name: "provider-first",
+          strategy: "fallback",
+          members: [
+            { providerType: "xai", model: "grok-4.5" },
+            { providerId: "prov_backup", model: "backup-model" },
+          ],
+        },
+      ],
+    });
+    const calls = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (_url, options) => {
+        const token = authToken(options);
+        calls.push(token);
+        if (token === "backup-key") return successResponse("backup after account pool");
+        return new Response(JSON.stringify({ error: { message: "quota exhausted" } }), {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    const resolved = router.resolveTargets(store.load(), "provider-first");
+    assert.deepEqual(
+      resolved.members.map((member) => [member.upstreamModel, member.accounts.map((account) => account.id)]),
+      [
+        ["grok-4.5", ["prov_a", "prov_b"]],
+        ["backup-model", ["prov_backup"]],
+      ]
+    );
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "provider-first",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+      },
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(result.openAiJson.choices[0].message.content, "backup after account pool");
+    assert.deepEqual(calls, ["token-a", "token-b", "backup-key"]);
+  });
+
+  it("round-robins route members while retaining account fallback inside each member", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({
+      providers: [
+        oauthAccount("prov_a", "token-a", 100),
+        oauthAccount("prov_b", "token-b", 200),
+        {
+          id: "prov_backup",
+          type: "openai-compat",
+          name: "Backup",
+          baseUrl: "https://backup.test/v1",
+          apiKey: "backup-key",
+          enabled: true,
+          models: [{ id: "backup-model", name: "Backup model", enabled: true }],
+        },
+      ],
+      combos: [
+        {
+          id: "provider-round-robin",
+          name: "provider-round-robin",
+          strategy: "round-robin",
+          members: [
+            { providerType: "xai", model: "grok-4.5" },
+            { providerId: "prov_backup", model: "backup-model" },
+          ],
+        },
+      ],
+    });
+    const calls = [];
+    const router = createRouter({
+      store,
+      logger: captureLogger(),
+      fetchImpl: async (_url, options) => {
+        const token = authToken(options);
+        calls.push(token);
+        if (token === "backup-key") return successResponse("backup");
+        return new Response(JSON.stringify({ error: { message: "quota exhausted" } }), {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    const first = await router.chatCompletions({
+      body: { model: "provider-round-robin", messages: [{ role: "user", content: "one" }] },
+    });
+    const second = await router.chatCompletions({
+      body: { model: "provider-round-robin", messages: [{ role: "user", content: "two" }] },
+    });
+
+    assert.equal(first.ok, true, JSON.stringify(first.error));
+    assert.equal(second.ok, true, JSON.stringify(second.error));
+    assert.deepEqual(calls, ["token-a", "token-b", "backup-key", "backup-key"]);
+  });
+
   it("does not fall back or lock accounts after caller cancellation", async () => {
     const store = createStore(tmpConfig());
     store.seed({

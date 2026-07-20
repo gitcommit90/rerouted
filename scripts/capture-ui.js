@@ -654,21 +654,21 @@ app.whenReady().then(async () => {
         window.__rr_goto_page("combos");
         document.querySelector("button[data-edit-index]")?.click();
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        let account = document.getElementById("c-add-account");
+        let provider = document.getElementById("c-add-provider");
         let model = document.getElementById("c-add-model");
         let add = document.getElementById("btn-add-member");
-        if (!account || !model?.disabled || !add?.disabled) {
+        if (!provider || !model?.disabled || !add?.disabled) {
           throw new Error("Route picker did not start with Model and Add disabled");
         }
-        account.value = "prov_chatgpt_demo";
-        account.dispatchEvent(new Event("change", { bubbles: true }));
+        provider.value = "provider:chatgpt";
+        provider.dispatchEvent(new Event("change", { bubbles: true }));
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        account = document.getElementById("c-add-account");
+        provider = document.getElementById("c-add-provider");
         model = document.getElementById("c-add-model");
         add = document.getElementById("btn-add-member");
         const modelOptions = [...model.options].filter((option) => option.value);
-        if (account.value !== "prov_chatgpt_demo" || model.disabled || !modelOptions.length) {
-          throw new Error("Selecting an account did not enable and populate its models");
+        if (provider.value !== "provider:chatgpt" || model.disabled || !modelOptions.length) {
+          throw new Error("Selecting a provider did not enable and populate its models");
         }
         model.value = modelOptions[1]?.value || modelOptions[0].value;
         model.dispatchEvent(new Event("change", { bubbles: true }));
@@ -682,9 +682,9 @@ app.whenReady().then(async () => {
         const before = document.querySelectorAll(".member-row").length;
         document.getElementById("btn-add-member")?.click();
         const after = document.querySelectorAll(".member-row").length;
-        const account = document.getElementById("c-add-account");
+        const provider = document.getElementById("c-add-provider");
         const model = document.getElementById("c-add-model");
-        if (after !== before + 1 || account.value || !model.disabled) {
+        if (after !== before + 1 || provider.value || !model.disabled) {
           throw new Error("Adding a route member did not reset the dependent picker");
         }
         return true;

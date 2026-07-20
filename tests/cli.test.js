@@ -11,7 +11,7 @@ const {
   createProcessLock,
   defaultUserData,
 } = require("../src/lib/headless-runtime");
-const { runFirstSetup } = require("../src/cli/setup");
+const { publicModelOptions, runFirstSetup } = require("../src/cli/setup");
 const { verifyPassword } = require("../src/lib/password");
 
 function memoryOutput() {
@@ -27,6 +27,39 @@ function memoryOutput() {
 }
 
 describe("ReRouted CLI", () => {
+  it("builds route choices by provider and model instead of by account", () => {
+    const options = publicModelOptions({
+      providers: [
+        {
+          id: "prov_chatgpt_one",
+          type: "chatgpt",
+          name: "ChatGPT Plus",
+          enabled: true,
+          models: [{ id: "gpt-5.6", name: "GPT 5.6", enabled: true }],
+        },
+        {
+          id: "prov_chatgpt_two",
+          type: "codex",
+          name: "ChatGPT Team",
+          enabled: true,
+          models: [{ id: "gpt-5.6", name: "GPT 5.6", enabled: true }],
+        },
+        {
+          id: "prov_lab",
+          type: "openai-compat",
+          name: "Local Lab",
+          enabled: true,
+          models: [{ id: "lab-model", name: "Lab model", enabled: true }],
+        },
+      ],
+    });
+
+    assert.deepEqual(options, [
+      { label: "ChatGPT: GPT 5.6", providerType: "chatgpt", model: "gpt-5.6" },
+      { label: "Local Lab: Lab model", providerId: "prov_lab", model: "lab-model" },
+    ]);
+  });
+
   it("parses start options and validates network boundaries", () => {
     assert.deepEqual(parseArgs(["--host", "localhost", "--port", "5050", "--no-interactive"]), {
       command: "start",
