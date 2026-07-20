@@ -178,6 +178,10 @@ function migrate(cfg) {
   const needsXaiLockReset = sourceVersion < XAI_LOCK_RESET_VERSION;
   const needsRetiredOAuthCleanup = sourceVersion < RETIRED_OAUTH_CLEANUP_VERSION;
 
+  // The credential scan was removed from onboarding. Resume interrupted older
+  // setups at the next durable step instead of sending them back to the start.
+  if (cfg.onboardingStep === "auto-detect") cfg.onboardingStep = "oauth-providers";
+
   if (!Array.isArray(cfg.providers)) cfg.providers = [];
 
   if (!Array.isArray(cfg.apiKeys) || !cfg.apiKeys.length) {

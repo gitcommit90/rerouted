@@ -77,6 +77,16 @@ describe("main-process IPC lock enforcement", () => {
   it("opens only the product's HTTPS destinations from the renderer", () => {
     assert.equal(isAllowedExternalUrl("https://rerouted.dev"), true);
     assert.equal(isAllowedExternalUrl("https://www.rerouted.dev/about"), true);
+    assert.equal(
+      isAllowedExternalUrl("https://openrouter.ai/workspaces/default/keys"),
+      true
+    );
+    assert.equal(
+      isAllowedExternalUrl("https://build.nvidia.com/settings/api-keys"),
+      true
+    );
+    assert.equal(isAllowedExternalUrl("https://openrouter.ai/models"), false);
+    assert.equal(isAllowedExternalUrl("https://build.nvidia.com/explore"), false);
     assert.equal(isAllowedExternalUrl("http://rerouted.dev"), false);
     assert.equal(isAllowedExternalUrl("file:///tmp/secret"), false);
     assert.equal(isAllowedExternalUrl("https://example.com"), false);

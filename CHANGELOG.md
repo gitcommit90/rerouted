@@ -9,8 +9,19 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-07-20
+
+### Added
+
+- Back navigation throughout onboarding with in-progress form and route state preserved.
+- All On and All Off controls for every connected account's model list.
+- Direct API-key links for OpenRouter and NVIDIA NIM connection forms.
+
 ### Changed
 
+- Reworked Routes into a compact card grid with whole-card editing and a focused editor.
+- Added drag-and-drop route-member ordering alongside the existing accessible arrow controls.
+- Removed onboarding credential autodetection and its renderer, dashboard, CLI, and IPC paths.
 - Formalized project governance, release lifecycle, PR/release note expectations, and repository hygiene (branch cleanup, merge defaults, maintainer docs).
 
 ## [0.5.4] - 2026-07-18
@@ -63,7 +74,8 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 See [GitHub Releases](https://github.com/gitcommit90/rerouted/releases) for artifact digests and notes prior to the Keep a Changelog narrative. Notable themes in late 0.4.x included signed/notarized distribution, in-app updates, named routes, OAuth account pools, OpenAI chat completions and Responses routing, and launch hardening.
 
-[Unreleased]: https://github.com/gitcommit90/rerouted/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/gitcommit90/rerouted/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.5
 [0.5.4]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.4
 [0.5.3]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.3
 [0.5.2]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.2

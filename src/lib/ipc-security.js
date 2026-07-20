@@ -7,7 +7,11 @@ const LOCKED_CHANNELS = new Set([
   "app:quit",
 ]);
 
-const EXTERNAL_HOSTS = new Set(["rerouted.dev", "www.rerouted.dev"]);
+const PRODUCT_HOSTS = new Set(["rerouted.dev", "www.rerouted.dev"]);
+const PROVIDER_KEY_URLS = new Set([
+  "https://openrouter.ai/workspaces/default/keys",
+  "https://build.nvidia.com/settings/api-keys",
+]);
 
 function hasAdminPassword(cfg) {
   return !!cfg?.adminPasswordHash && cfg.adminPasswordHash !== "harness";
@@ -34,7 +38,11 @@ function lockedError() {
 function isAllowedExternalUrl(value) {
   try {
     const url = new URL(String(value || ""));
-    return url.protocol === "https:" && EXTERNAL_HOSTS.has(url.hostname.toLowerCase());
+    if (url.protocol !== "https:") return false;
+    if (PRODUCT_HOSTS.has(url.hostname.toLowerCase())) return true;
+    url.hash = "";
+    url.search = "";
+    return PROVIDER_KEY_URLS.has(url.toString().replace(/\/$/, ""));
   } catch {
     return false;
   }

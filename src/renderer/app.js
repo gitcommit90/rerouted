@@ -2,13 +2,13 @@
 
 const api = window.rerouted;
 const dashboardRuntime = document.documentElement.classList.contains("dashboard-runtime");
-const { accountDisplayName, accountIdentityLabel, maskAccountEmail } =
-  window.ReroutedAccountIdentity;
+const { accountDisplayName, accountIdentityLabel } = window.ReroutedAccountIdentity;
 const { compactNumber: fmtNum } = window.ReroutedNumberFormat;
 const { createLatestRequestGate, guardSensitiveRender } = window.ReroutedRendererLockState;
 const { buildEnabledProviderGroups, buildProviderCatalog, canonicalProviderType } =
   window.ReroutedProviderCatalog;
-const { buildRouteAccountOptions, modelsForRouteAccount } = window.ReroutedRoutePicker;
+const { buildRouteAccountOptions, modelsForRouteAccount, moveRouteMember } =
+  window.ReroutedRoutePicker;
 const { oauthPrompt } = window.ReroutedOAuthPrompt;
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
@@ -23,6 +23,22 @@ let toastTimer = null;
 let armDelete = null;
 let activeProviderPanel = null;
 const stateRequestGate = createLatestRequestGate();
+const onboardingDraft = {
+  adminPassword: "",
+  adminPasswordConfirm: "",
+  keyedPresetId: null,
+  keyedFields: {},
+  firstCombo: {
+    name: "coding",
+    strategy: "fallback",
+    members: new Set(),
+  },
+};
+
+const PROVIDER_KEY_URLS = {
+  openrouter: "https://openrouter.ai/workspaces/default/keys",
+  nvidia: "https://build.nvidia.com/settings/api-keys",
+};
 
 function reducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
@@ -237,7 +253,7 @@ function wireSubnav() {
 }
 
 function comboRouteId(combo) {
-  return String(combo?.name || combo?.id || "route");
+  return String(combo?.name || "Untitled route");
 }
 
 function friendlyRoute(model) {
@@ -318,6 +334,23 @@ function stepProgress(step) {
   return `<div class="steps">${dots}</div>`;
 }
 
+function onboardingBackButton() {
+  return '<button type="button" class="btn btn-secondary" data-onboarding-back>Back</button>';
+}
+
+function wireOnboardingBack({ tutorial = false } = {}) {
+  const button = view.querySelector("[data-onboarding-back]");
+  if (!button) return;
+  button.onclick = () => {
+    const steps = (state.steps || []).filter((step) => step !== "done");
+    const current = state.onboardingStep || "permissions";
+    const index = steps.indexOf(current);
+    if (index <= 0) return;
+    if (tutorial) tutorialPage = TUTORIAL.length - 1;
+    goStep(steps[index - 1]);
+  };
+}
+
 // ─── Onboarding screens ───────────────────────────────────────────────
 
 function renderPermissions() {
@@ -364,12 +397,20 @@ function renderAdminPassword() {
         ? "This password protects dashboard access to your providers, routes, gateway keys, and activity. It is stored locally as a scrypt hash — never sent anywhere else."
         : "Your active macOS login unlocks ReRouted. This password is the fallback when the app cannot confirm that session. It is stored as a scrypt hash — never sent anywhere."
     }</p>
-    <input class="input" id="pw1" type="password" placeholder="Password" autocomplete="new-password" />
-    <input class="input" id="pw2" type="password" placeholder="Confirm password" autocomplete="new-password" />
+    <input class="input" id="pw1" type="password" placeholder="Password" autocomplete="new-password" value="${esc(onboardingDraft.adminPassword)}" />
+    <input class="input" id="pw2" type="password" placeholder="Confirm password" autocomplete="new-password" value="${esc(onboardingDraft.adminPasswordConfirm)}" />
     <div class="btn-row">
+      ${onboardingBackButton()}
       <button type="button" class="btn btn-primary" id="btn-next">Continue</button>
     </div>
   `;
+  wireOnboardingBack();
+  $("#pw1").oninput = (event) => {
+    onboardingDraft.adminPassword = event.target.value;
+  };
+  $("#pw2").oninput = (event) => {
+    onboardingDraft.adminPasswordConfirm = event.target.value;
+  };
   $("#btn-next").onclick = async () => {
     const a = $("#pw1").value;
     const b = $("#pw2").value;
@@ -392,61 +433,12 @@ function renderWelcome() {
       <div class="hero-sub">Claude · ChatGPT · Gemini · Grok · API keys</div>
     </section>
     <div class="btn-row">
+      ${onboardingBackButton()}
       <button type="button" class="btn btn-primary" id="btn-next">Continue</button>
     </div>
   `;
-  $("#btn-next").onclick = () => goStep("auto-detect");
-}
-
-function renderAutoDetect() {
-  view.innerHTML = `
-    ${stepProgress("auto-detect")}
-    <h1 class="h1">Auto-detect providers?</h1>
-    <p class="lead">ReRouted can import supported credentials already stored on this ${dashboardRuntime ? "machine" : "Mac"} so you can skip another sign-in. Tokens stay local.</p>
-    <div class="btn-row">
-      <button type="button" class="btn btn-secondary" id="btn-skip">Skip</button>
-      <button type="button" class="btn btn-primary" id="btn-scan">Scan this ${dashboardRuntime ? "machine" : "Mac"}</button>
-    </div>
-    <div id="detect-results"></div>
-  `;
-  $("#btn-skip").onclick = () => goStep("oauth-providers");
-  $("#btn-scan").onclick = async () => {
-    const box = $("#detect-results");
-    box.innerHTML = `<p class="lead">Scanning…</p>`;
-    const r = await api.invoke("app:detect-providers");
-    const found = r.found || [];
-    if (!found.length) {
-      box.innerHTML = `<div class="card"><div class="card-sub">Nothing found. You can connect providers next.</div></div>
-        <div class="btn-row"><button type="button" class="btn btn-primary" id="btn-next">Continue</button></div>`;
-      $("#btn-next").onclick = () => goStep("oauth-providers");
-      return;
-    }
-    box.innerHTML = `
-      <p class="label">Found ${found.length}</p>
-      <div class="check-list" id="det-list">
-        ${found
-          .map(
-            (f) => `
-          <label class="check-item">
-            <input type="checkbox" checked data-id="${esc(f.id)}" />
-            <div>
-              <div class="card-title">${esc(accountDisplayName(f.name, f.email, providerLabel(f.type)))}</div>
-              <div class="card-sub">${esc(f.type)} · ${esc(f.source)}${f.email ? " · " + esc(maskAccountEmail(f.email)) : ""}</div>
-            </div>
-          </label>`
-          )
-          .join("")}
-      </div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btn-import">Import selected</button>
-      </div>`;
-    $("#btn-import").onclick = async () => {
-      const ids = [...view.querySelectorAll("#det-list input:checked")].map((el) => el.dataset.id);
-      await api.invoke("app:import-detected", ids);
-      toast(`Imported ${ids.length}`);
-      goStep("oauth-providers");
-    };
-  };
+  wireOnboardingBack();
+  $("#btn-next").onclick = () => goStep("oauth-providers");
 }
 
 function renderOauthProviders() {
@@ -467,6 +459,7 @@ function renderOauthProviders() {
     </div>
     <div id="oauth-panel"></div>
     <div class="btn-row">
+      ${onboardingBackButton()}
       <button type="button" class="btn btn-primary" id="btn-next">Continue</button>
     </div>
   `;
@@ -504,6 +497,7 @@ function renderOauthProviders() {
       };
     };
   });
+  wireOnboardingBack();
   $("#btn-next").onclick = () => goStep("api-keys");
 }
 
@@ -526,7 +520,12 @@ function keyedProviderPickerHtml(presets, { includeCustom = true } = {}) {
 
 function bindKeyedProviderPicker(
   root,
-  { onAdded, successMessage = "Provider added", initialPresetId = null } = {}
+  {
+    onAdded,
+    successMessage = "Provider added",
+    initialPresetId = null,
+    draft = null,
+  } = {}
 ) {
   const presets = state.keyedPresets || [];
   const pickerButtons = [...root.querySelectorAll("[data-keyed-preset]")];
@@ -544,23 +543,29 @@ function bindKeyedProviderPicker(
       });
 
       const form = $("[data-keyed-form]", root);
+      if (draft) draft.presetId = presetId;
+      const savedFields = draft?.fields?.[presetId] || {};
+      const getKeyUrl = PROVIDER_KEY_URLS[presetId];
       form.innerHTML = `
         <div class="card">
           <div class="label">${esc(isCustom ? "Custom provider" : preset.name)}</div>
           ${
             isCustom
-              ? `<input class="input" data-keyed-field="name" placeholder="Name" />
-                <input class="input" data-keyed-field="base" placeholder="Base URL (https://…/v1)" />
-                <input class="input" data-keyed-field="model" placeholder="Exact model ID (if /models is unavailable)" />
+              ? `<input class="input" data-keyed-field="name" placeholder="Name" value="${esc(savedFields.name || "")}" />
+                <input class="input" data-keyed-field="base" placeholder="Base URL (https://…/v1)" value="${esc(savedFields.base || "")}" />
+                <input class="input" data-keyed-field="model" placeholder="Exact model ID (if /models is unavailable)" value="${esc(savedFields.model || "")}" />
                 <div class="card-sub">Optional. Tests chat directly without /models.</div>`
               : ""
           }
           ${
             preset?.needsAccountId
-              ? `<input class="input" data-keyed-field="account" placeholder="Cloudflare Account ID" />`
+              ? `<input class="input" data-keyed-field="account" placeholder="Cloudflare Account ID" value="${esc(savedFields.account || "")}" />`
               : ""
           }
-          <input class="input" data-keyed-field="key" type="password" placeholder="API key" />
+          <div class="key-entry-row">
+            <input class="input" data-keyed-field="key" type="password" placeholder="API key" value="${esc(savedFields.key || "")}" />
+            ${getKeyUrl ? `<button type="button" class="btn btn-secondary btn-sm" data-get-key="${esc(getKeyUrl)}">Get key</button>` : ""}
+          </div>
           <div class="btn-row">
             <button type="button" class="btn btn-secondary btn-sm" data-keyed-action="test">Fetch models / Test</button>
             <button type="button" class="btn btn-primary btn-sm" data-keyed-action="add" disabled>Add</button>
@@ -583,6 +588,9 @@ function bindKeyedProviderPicker(
       const addButton = $("[data-keyed-action='add']", form);
       const status = $("[data-keyed-status]", form);
       const copyError = $("[data-keyed-copy-error]", form);
+      form.querySelector("[data-get-key]")?.addEventListener("click", (event) => {
+        api.invoke("app:open-external", event.currentTarget.dataset.getKey);
+      });
       const accountId = () => field("account")?.value?.trim() || "";
       const baseUrl = () =>
         isCustom
@@ -613,7 +621,16 @@ function bindKeyedProviderPicker(
           status.textContent = "Changes need to be tested again.";
         }
       };
-      inputs.forEach((input) => input.addEventListener("input", invalidateTest));
+      inputs.forEach((input) =>
+        input.addEventListener("input", () => {
+          if (draft) {
+            draft.fields[presetId] = Object.fromEntries(
+              inputs.map((field) => [field.dataset.keyedField, field.value])
+            );
+          }
+          invalidateTest();
+        })
+      );
 
       testButton.onclick = async () => {
         const generation = ++testGeneration;
@@ -715,13 +732,26 @@ function renderApiKeys() {
     <p class="lead">Optional. Quick-add a known chat-completions provider, or enter a custom base URL. Discover its models or validate one exact model ID before Add.</p>
     ${keyedProviderPickerHtml(presets)}
     <div class="btn-row">
+      ${onboardingBackButton()}
       <button type="button" class="btn btn-secondary" id="btn-skip">Skip</button>
       <button type="button" class="btn btn-primary" id="btn-next">Continue</button>
     </div>
   `;
   $("#btn-skip").onclick = () => goStep("endpoint-ready");
   $("#btn-next").onclick = () => goStep("endpoint-ready");
-  bindKeyedProviderPicker(view);
+  wireOnboardingBack();
+  bindKeyedProviderPicker(view, {
+    initialPresetId: onboardingDraft.keyedPresetId,
+    draft: {
+      get presetId() {
+        return onboardingDraft.keyedPresetId;
+      },
+      set presetId(value) {
+        onboardingDraft.keyedPresetId = value;
+      },
+      fields: onboardingDraft.keyedFields,
+    },
+  });
 }
 
 function renderEndpointReady() {
@@ -735,11 +765,13 @@ function renderEndpointReady() {
     <div class="label">API key</div>
     ${secretHtml(state.apiKey, "onboard-key")}
     <div class="btn-row">
+      ${onboardingBackButton()}
       <button type="button" class="btn btn-primary" id="btn-next">I've saved this</button>
     </div>
   `;
   $("#copy-url").onclick = () => copy(state.endpoint);
   wireSecrets();
+  wireOnboardingBack();
   $("#btn-next").onclick = () => goStep("tutorial");
 }
 
@@ -767,15 +799,18 @@ function renderTutorial() {
     <p class="lead">${esc(pageT.b)}</p>
     <div class="footer-note">${tutorialPage + 1} / ${TUTORIAL.length}</div>
     <div class="btn-row">
-      ${tutorialPage > 0 ? `<button type="button" class="btn btn-secondary" id="btn-back">Back</button>` : ""}
+      <button type="button" class="btn btn-secondary" id="btn-back">Back</button>
       <button type="button" class="btn btn-primary" id="btn-next">${tutorialPage < TUTORIAL.length - 1 ? "Next" : "Continue"}</button>
     </div>
   `;
-  if ($("#btn-back"))
-    $("#btn-back").onclick = () => {
+  $("#btn-back").onclick = () => {
+    if (tutorialPage > 0) {
       tutorialPage--;
       renderTutorial();
-    };
+    } else {
+      goStep("endpoint-ready");
+    }
+  };
   $("#btn-next").onclick = () => {
     if (tutorialPage < TUTORIAL.length - 1) {
       tutorialPage++;
@@ -786,15 +821,16 @@ function renderTutorial() {
 
 function renderFirstCombo() {
   const models = flatModels();
+  const draft = onboardingDraft.firstCombo;
   view.innerHTML = `
     ${stepProgress("first-combo")}
     <div class="eyebrow">First route</div>
     <h1 class="h1">Name the model your tools will use</h1>
     <p class="lead">Optional. This exact model ID appears in <span class="mono">/v1/models</span>; its members stay behind the scenes.</p>
-    <input class="input" id="c-name" placeholder="Model ID (for example, coding)" value="coding" />
+    <input class="input" id="c-name" placeholder="Model ID (for example, coding)" value="${esc(draft.name)}" />
     <div class="seg" id="c-strat">
-      <button type="button" data-s="fallback" class="active">Fallback</button>
-      <button type="button" data-s="round-robin">Round-robin</button>
+      <button type="button" data-s="fallback" class="${draft.strategy === "fallback" ? "active" : ""}">Fallback</button>
+      <button type="button" data-s="round-robin" class="${draft.strategy === "round-robin" ? "active" : ""}">Round-robin</button>
     </div>
     <div class="label">Members</div>
     <div class="member-pick">
@@ -803,25 +839,36 @@ function renderFirstCombo() {
           ? models
               .map(
                 (m) =>
-                  `<label class="check-item"><input type="checkbox" data-pid="${esc(m.providerId)}" data-model="${esc(m.upstreamModel)}" /><div><div class="card-title ellip">${esc(m.name || m.upstreamModel)}</div><div class="card-sub mono">${esc(m.id)}</div></div></label>`
+                  `<label class="check-item"><input type="checkbox" data-pid="${esc(m.providerId)}" data-model="${esc(m.upstreamModel)}" ${draft.members.has(memberKey({ providerId: m.providerId, model: m.upstreamModel })) ? "checked" : ""} /><div><div class="card-title ellip">${esc(m.name || m.upstreamModel)}</div><div class="card-sub mono">${esc(m.id)}</div></div></label>`
               )
               .join("")
           : `<div class="empty">No models yet — add a provider first.</div>`
       }
     </div>
     <div class="btn-row">
+      ${onboardingBackButton()}
       <button type="button" class="btn btn-secondary" id="btn-skip">Skip</button>
       <button type="button" class="btn btn-primary" id="btn-create">Create route</button>
     </div>
   `;
-  let strategy = "fallback";
+  $("#c-name").oninput = (event) => {
+    draft.name = event.target.value;
+  };
+  view.querySelectorAll(".member-pick input").forEach((input) => {
+    input.onchange = () => {
+      const key = memberKey({ providerId: input.dataset.pid, model: input.dataset.model });
+      if (input.checked) draft.members.add(key);
+      else draft.members.delete(key);
+    };
+  });
   view.querySelectorAll("#c-strat button").forEach((b) => {
     b.onclick = () => {
       view.querySelectorAll("#c-strat button").forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
-      strategy = b.dataset.s;
+      draft.strategy = b.dataset.s;
     };
   });
+  wireOnboardingBack({ tutorial: true });
   $("#btn-skip").onclick = () => finishOnboarding();
   $("#btn-create").onclick = async () => {
     const members = [...view.querySelectorAll(".member-pick input:checked")].map((el) => ({
@@ -833,7 +880,7 @@ function renderFirstCombo() {
     if (!members.length) return toast("Pick at least one model");
     const result = await api.invoke("app:save-combo", {
       name,
-      strategy,
+      strategy: draft.strategy,
       members,
     });
     if (!result?.ok) return toast(result?.error || "Could not create route");
@@ -1368,7 +1415,11 @@ function providerAccountHtml(account, provider) {
         <div class="provider-meta-line"><span class="pill">${esc(provider.name)}</span>${account.accountAlias ? `<span class="pill mono">${esc(account.accountAlias)}</span>` : ""}<span class="pill">${models.length} models</span></div>
         ${
           models.length
-            ? models
+            ? `<div class="model-bulk-actions" aria-label="Model controls">
+                <span>${onCount} on</span>
+                <button type="button" class="btn btn-secondary btn-sm" data-all-models="on" data-provider-id="${esc(account.id)}" ${onCount === models.length ? "disabled" : ""}>All On</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-all-models="off" data-provider-id="${esc(account.id)}" ${onCount === 0 ? "disabled" : ""}>All Off</button>
+              </div>${models
                 .map(
                   (model) => `
           <div class="model-row">
@@ -1379,7 +1430,7 @@ function providerAccountHtml(account, provider) {
             <label class="toggle" data-stop-expand="1"><input type="checkbox" data-model-en="${esc(account.id)}" data-mid="${esc(model.id)}" ${model.enabled !== false ? "checked" : ""} /><span></span></label>
           </div>`
                 )
-                .join("")
+                .join("")}`
             : `<div class="empty">No models configured for this account.</div>`
         }
         <div class="label account-model-label">Add exact model ID</div>
@@ -1595,6 +1646,21 @@ function renderProviders() {
       renderProviders();
     });
   });
+  view.querySelectorAll("button[data-all-models]").forEach((button) => {
+    button.onclick = async (event) => {
+      event.stopPropagation();
+      const enabled = button.dataset.allModels === "on";
+      button.disabled = true;
+      const result = await api.invoke("app:set-all-models-enabled", {
+        providerId: button.dataset.providerId,
+        enabled,
+      });
+      if (!result?.ok) return toast("Could not update models");
+      toast(enabled ? "All models enabled" : "All models disabled");
+      await refresh();
+      renderProviders();
+    };
+  });
   view.querySelectorAll("button[data-add-model]").forEach((btn) => {
     btn.onclick = async () => {
       const pid = btn.dataset.addModel;
@@ -1723,29 +1789,28 @@ function renderCombos() {
 
   view.innerHTML = `
     ${pageHeader("Routing", "Routes", "Give clients one memorable model ID while ReRouted handles account and provider failover.", '<button type="button" class="btn btn-primary btn-sm" id="btn-new-route">New route</button>')}
-    ${
-      combos.length
-        ? combos
+    <div class="route-card-grid">
+      ${
+        combos.length
+          ? combos
             .map(
-              (c) => `
-      <section class="route-card">
-        <div class="route-head">
-          <div class="route-copy">
-            <div class="route-name">${esc(comboRouteId(c))}</div>
-            <div class="route-summary">${c.strategy === "round-robin" ? "Rotate every request" : "Fill in order, then fall back"} · ${(c.members || []).length} member${(c.members || []).length === 1 ? "" : "s"}</div>
-            <div class="route-nodes">${(c.members || []).slice(0, 5).map((_, index) => `${index ? '<span class="route-node-line"></span>' : ""}<span class="route-node">${index + 1}</span>`).join("")}${(c.members || []).length > 5 ? '<span class="route-node-line"></span><span class="route-node">+</span>' : ""}</div>
-          </div>
-          <div class="action-row">
-            <span class="strategy-badge">${esc(c.strategy)}</span>
-            <button type="button" class="btn btn-secondary btn-sm" data-edit="${esc(c.storageId || c.id)}">Edit</button>
-            <button type="button" class="btn btn-danger btn-sm" data-del="${esc(c.storageId || c.id)}">Delete</button>
-          </div>
+              (c, index) => `
+      <article class="route-card">
+        <button type="button" class="route-card-hit" data-edit-index="${index}" aria-label="Edit route ${esc(comboRouteId(c))}"></button>
+        <div class="route-card-top">
+          <span class="strategy-badge">${c.strategy === "round-robin" ? "Round robin" : "Fallback"}</span>
+          <button type="button" class="route-delete" data-del-index="${index}" aria-label="Delete route ${esc(comboRouteId(c))}" title="Delete route">×</button>
         </div>
-      </section>`
+        <div class="route-name">${esc(comboRouteId(c))}</div>
+        <div class="route-summary">${c.strategy === "round-robin" ? "Rotates every request" : "Fills in order"} · ${(c.members || []).length} member${(c.members || []).length === 1 ? "" : "s"}</div>
+        <div class="route-nodes" aria-hidden="true">${(c.members || []).slice(0, 5).map((_, index) => `${index ? '<span class="route-node-line"></span>' : ""}<span class="route-node">${index + 1}</span>`).join("")}${(c.members || []).length > 5 ? '<span class="route-node-line"></span><span class="route-node">+</span>' : ""}</div>
+        <div class="route-card-action" aria-hidden="true">Edit route <span>→</span></div>
+      </article>`
             )
             .join("")
-        : `<div class="empty">No routes yet. Create a memorable model ID and choose where requests should go.</div>`
-    }
+          : `<div class="empty">No routes yet. Create a memorable model ID and choose where requests should go.</div>`
+      }
+    </div>
     ${
       editor
         ? `<section class="action-panel route-editor">
@@ -1764,10 +1829,11 @@ function renderCombos() {
             ? editor.members
                 .map((member, index) => {
                   const info = comboMemberInfo(member, models);
-                  return `<div class="member-row">
+                  return `<div class="member-row" draggable="true" data-member-index="${index}">
+                    <div class="member-drag" aria-hidden="true"><span></span><span></span><span></span></div>
                     <div class="member-index">${index + 1}</div>
                     <div class="ellip"><div class="row-title">${esc(info?.name || member.model)}</div><div class="model-id">${esc(info?.id || member.model)}</div></div>
-                    <div class="member-actions"><button type="button" data-member-up="${index}" title="Move up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-member-down="${index}" title="Move down" ${index === editor.members.length - 1 ? "disabled" : ""}>↓</button><button type="button" data-member-remove="${index}" title="Remove">×</button></div>
+                    <div class="member-actions"><button type="button" data-member-up="${index}" title="Move up" aria-label="Move ${esc(info?.name || member.model)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-member-down="${index}" title="Move down" aria-label="Move ${esc(info?.name || member.model)} down" ${index === editor.members.length - 1 ? "disabled" : ""}>↓</button><button type="button" data-member-remove="${index}" title="Remove" aria-label="Remove ${esc(info?.name || member.model)}">×</button></div>
                   </div>`;
                 })
                 .join("")
@@ -1785,20 +1851,20 @@ function renderCombos() {
     }
   `;
   $("#btn-new-route").onclick = () => beginComboEdit(null);
-  view.querySelectorAll("button[data-edit]").forEach((btn) => {
-    btn.onclick = () =>
-      beginComboEdit(
-        combos.find((combo) => (combo.storageId || combo.id) === btn.dataset.edit)
-      );
+  view.querySelectorAll("button[data-edit-index]").forEach((btn) => {
+    btn.onclick = () => beginComboEdit(combos[Number(btn.dataset.editIndex)]);
   });
-  view.querySelectorAll("button[data-del]").forEach((btn) => {
+  view.querySelectorAll("button[data-del-index]").forEach((btn) => {
     btn.onclick = async () => {
-      if (armDelete !== btn.dataset.del) {
-        armDelete = btn.dataset.del;
+      const combo = combos[Number(btn.dataset.delIndex)];
+      const id = combo?.storageId || combo?.id;
+      if (!id) return;
+      if (armDelete !== id) {
+        armDelete = id;
         btn.textContent = "Sure?";
         return;
       }
-      await api.invoke("app:delete-combo", btn.dataset.del);
+      await api.invoke("app:delete-combo", id);
       armDelete = null;
       await refresh();
       comboDraft = null;
@@ -1817,7 +1883,7 @@ function renderCombos() {
     button.onclick = () => {
       syncComboDraft();
       const index = Number(button.dataset.memberUp);
-      [editor.members[index - 1], editor.members[index]] = [editor.members[index], editor.members[index - 1]];
+      moveRouteMember(editor.members, index, index - 1);
       renderCombos();
     };
   });
@@ -1825,8 +1891,36 @@ function renderCombos() {
     button.onclick = () => {
       syncComboDraft();
       const index = Number(button.dataset.memberDown);
-      [editor.members[index], editor.members[index + 1]] = [editor.members[index + 1], editor.members[index]];
+      moveRouteMember(editor.members, index, index + 1);
       renderCombos();
+    };
+  });
+  let draggedMemberIndex = null;
+  view.querySelectorAll("[data-member-index]").forEach((row) => {
+    row.ondragstart = (event) => {
+      syncComboDraft();
+      draggedMemberIndex = Number(row.dataset.memberIndex);
+      row.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", row.dataset.memberIndex);
+    };
+    row.ondragover = (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      row.classList.add("drag-over");
+    };
+    row.ondragleave = () => row.classList.remove("drag-over");
+    row.ondrop = (event) => {
+      event.preventDefault();
+      const from = draggedMemberIndex ?? Number(event.dataTransfer.getData("text/plain"));
+      const to = Number(row.dataset.memberIndex);
+      moveRouteMember(editor.members, from, to);
+      draggedMemberIndex = null;
+      renderCombos();
+    };
+    row.ondragend = () => {
+      draggedMemberIndex = null;
+      row.classList.remove("dragging", "drag-over");
     };
   });
   view.querySelectorAll("[data-member-remove]").forEach((button) => {
@@ -2407,7 +2501,6 @@ function render() {
       permissions: renderPermissions,
       "admin-password": renderAdminPassword,
       welcome: renderWelcome,
-      "auto-detect": renderAutoDetect,
       "oauth-providers": renderOauthProviders,
       "api-keys": renderApiKeys,
       "endpoint-ready": renderEndpointReady,

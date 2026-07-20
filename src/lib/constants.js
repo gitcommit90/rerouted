@@ -154,7 +154,6 @@ const ONBOARDING_STEPS = [
   "permissions",
   "admin-password",
   "welcome",
-  "auto-detect",
   "oauth-providers",
   "api-keys",
   "endpoint-ready",
