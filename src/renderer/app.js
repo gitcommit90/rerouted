@@ -1746,7 +1746,18 @@ function beginComboEdit(combo) {
       model: member.model || member.upstreamModel,
     })),
   };
-  renderCombos();
+  renderCombos({ focusEditor: true });
+}
+
+function focusRouteEditor() {
+  const editorEl = view.querySelector(".route-editor");
+  if (!editorEl) return;
+  editorEl.scrollIntoView({ block: "start", behavior: "auto" });
+  const name = $("#c-name");
+  if (name) {
+    name.focus({ preventScroll: true });
+    if (typeof name.select === "function") name.select();
+  }
 }
 
 function syncComboDraft() {
@@ -1767,7 +1778,7 @@ function routeAccountLabel(account) {
   return account.name;
 }
 
-function renderCombos() {
+function renderCombos(options = {}) {
   if (blockSensitiveRenderIfLocked()) return;
   const combos = state.combos || [];
   const models = flatModels();
@@ -1787,15 +1798,14 @@ function renderCombos() {
     editor.pickerModelId = null;
   }
 
-  view.innerHTML = `
-    ${pageHeader("Routing", "Routes", "Give clients one memorable model ID while ReRouted handles account and provider failover.", '<button type="button" class="btn btn-primary btn-sm" id="btn-new-route">New route</button>')}
+  const listMarkup = `
     <div class="route-card-grid">
       ${
         combos.length
           ? combos
             .map(
               (c, index) => `
-      <article class="route-card">
+      <article class="route-card${editor && (editor.id === (c.storageId || c.id) || (!editor.id && !c.storageId && !c.id)) ? " is-active" : ""}">
         <button type="button" class="route-card-hit" data-edit-index="${index}" aria-label="Edit route ${esc(comboRouteId(c))}"></button>
         <div class="route-card-top">
           <span class="strategy-badge">${c.strategy === "round-robin" ? "Round robin" : "Fallback"}</span>
@@ -1804,17 +1814,21 @@ function renderCombos() {
         <div class="route-name">${esc(comboRouteId(c))}</div>
         <div class="route-summary">${c.strategy === "round-robin" ? "Rotates every request" : "Fills in order"} · ${(c.members || []).length} member${(c.members || []).length === 1 ? "" : "s"}</div>
         <div class="route-nodes" aria-hidden="true">${(c.members || []).slice(0, 5).map((_, index) => `${index ? '<span class="route-node-line"></span>' : ""}<span class="route-node">${index + 1}</span>`).join("")}${(c.members || []).length > 5 ? '<span class="route-node-line"></span><span class="route-node">+</span>' : ""}</div>
-        <div class="route-card-action" aria-hidden="true">Edit route <span>→</span></div>
+        <div class="route-card-action" aria-hidden="true">${editor && (editor.id === (c.storageId || c.id)) ? "Editing" : "Open"} <span>→</span></div>
       </article>`
             )
             .join("")
           : `<div class="empty">No routes yet. Create a memorable model ID and choose where requests should go.</div>`
       }
-    </div>
-    ${
-      editor
-        ? `<section class="action-panel route-editor">
-      <div class="action-panel-head"><div class="eyebrow">${editor.id ? "Edit route" : "New route"}</div><div class="action-panel-title">${editor.id ? esc(editor.name || "Route") : "Build a route"}</div><div class="action-panel-sub">The model ID below is what clients see in <span class="mono">/v1/models</span>.</div></div>
+    </div>`;
+
+  const editorMarkup = editor
+    ? `<section class="action-panel route-editor" id="route-editor">
+      <div class="action-panel-head">
+        <div class="eyebrow">${editor.id ? "Edit route" : "New route"}</div>
+        <div class="action-panel-title">${editor.id ? esc(editor.name || "Route") : "Build a route"}</div>
+        <div class="action-panel-sub">The model ID below is what clients see in <span class="mono">/v1/models</span>.</div>
+      </div>
       <div class="label">Model ID</div>
       <input class="input" id="c-name" placeholder="coding-fast" value="${esc(editor.name)}" />
       <div class="label">Routing behavior</div>
@@ -1845,17 +1859,39 @@ function renderCombos() {
         <label class="route-picker-field" for="c-add-model"><span class="label">Model</span><select class="select" id="c-add-model" ${editor.pickerAccountId ? "" : "disabled"}><option value="">${editor.pickerAccountId ? "Choose a model…" : "Choose an account first…"}</option>${pickerModels.map((model) => `<option value="${esc(model.upstreamModel)}" ${model.upstreamModel === editor.pickerModelId ? "selected" : ""}>${esc(model.name)} · ${esc(model.upstreamModel)}</option>`).join("")}</select></label>
         <button type="button" class="btn btn-secondary btn-sm route-picker-add" id="btn-add-member" ${editor.pickerAccountId && editor.pickerModelId ? "" : "disabled"}>Add to route</button>
       </div>
-      <div class="btn-row"><button type="button" class="btn btn-secondary" id="btn-cancel-edit">Cancel</button><button type="button" class="btn btn-primary" id="btn-create">${editor.id ? "Save route" : "Create route"}</button></div>
+      <div class="btn-row"><button type="button" class="btn btn-secondary" id="btn-cancel-edit">Back to routes</button><button type="button" class="btn btn-primary" id="btn-create">${editor.id ? "Save route" : "Create route"}</button></div>
     </section>`
-        : ""
-    }
+    : "";
+
+  // When editing, replace the list with the editor (full page take-over). No buried bottom panel.
+  view.innerHTML = `
+    ${pageHeader(
+      "Routing",
+      editor ? (editor.id ? editor.name || "Edit route" : "New route") : "Routes",
+      editor
+        ? "Change the model ID, order, and failover for this route."
+        : "Give clients one memorable model ID while ReRouted handles account and provider failover.",
+      editor
+        ? '<button type="button" class="btn btn-secondary btn-sm" id="btn-back-routes">← Routes</button>'
+        : '<button type="button" class="btn btn-primary btn-sm" id="btn-new-route">New route</button>'
+    )}
+    ${editor ? editorMarkup : listMarkup}
   `;
-  $("#btn-new-route").onclick = () => beginComboEdit(null);
+
+  const backToList = () => {
+    comboDraft = null;
+    renderCombos();
+  };
+  const backBtn = $("#btn-back-routes");
+  if (backBtn) backBtn.onclick = backToList;
+  const newBtn = $("#btn-new-route");
+  if (newBtn) newBtn.onclick = () => beginComboEdit(null);
   view.querySelectorAll("button[data-edit-index]").forEach((btn) => {
     btn.onclick = () => beginComboEdit(combos[Number(btn.dataset.editIndex)]);
   });
   view.querySelectorAll("button[data-del-index]").forEach((btn) => {
-    btn.onclick = async () => {
+    btn.onclick = async (event) => {
+      event.stopPropagation();
       const combo = combos[Number(btn.dataset.delIndex)];
       const id = combo?.storageId || combo?.id;
       if (!id) return;
@@ -1984,6 +2020,9 @@ function renderCombos() {
     await refresh();
     renderCombos();
   };
+  if (options.focusEditor) {
+    requestAnimationFrame(() => focusRouteEditor());
+  }
 }
 
 let statsPeriod = "24h";

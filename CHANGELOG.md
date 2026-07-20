@@ -9,6 +9,13 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-07-20
+
+### Fixed
+
+- Opening a route now replaces the routes list with a full editor instead of burying an edit panel below the grid with no scroll.
+- Removed the laggy route-card lift animation so clicks feel immediate.
+
 ## [0.5.5] - 2026-07-20
 
 ### Added
