@@ -293,29 +293,6 @@ function registerIpc() {
   ipcMain.handle("app:set-admin-password", async () => ({ ok: true }));
   ipcMain.handle("app:verify-admin-password", async () => ({ ok: true }));
   ipcMain.handle("app:change-admin-password", async () => ({ ok: true }));
-  ipcMain.handle("app:detect-providers", async () => ({
-    ok: true,
-    found: [
-      {
-        id: "det1",
-        type: "chatgpt",
-        name: "ChatGPT",
-        source: "codex-cli",
-        hasAccess: true,
-        hasRefresh: true,
-      },
-      {
-        id: "det2",
-        type: "antigravity",
-        name: "Antigravity (user@example.com)",
-        source: "antigravity-file",
-        email: "user@example.com",
-        hasAccess: true,
-        hasRefresh: true,
-      },
-    ],
-  }));
-  ipcMain.handle("app:import-detected", async () => ({ ok: true }));
   ipcMain.handle("app:oauth-start", async () => {
     oauthStartsInFlight += 1;
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -432,7 +409,6 @@ const ONBOARD_STEPS = [
   "permissions",
   "admin-password",
   "welcome",
-  "auto-detect",
   "oauth-providers",
   "api-keys",
   "endpoint-ready",
@@ -534,24 +510,18 @@ app.whenReady().then(async () => {
       })()
     `);
     await sleep(500);
-    // For auto-detect, click scan to show results state
-    if (step === "auto-detect") {
-      await win.webContents.executeJavaScript(`
-        (async () => {
-          const b = document.getElementById("btn-scan");
-          if (b) { b.click(); await new Promise(r => setTimeout(r, 400)); }
-          const results = document.getElementById("detect-results");
-          if (!results?.textContent.includes("use*@example.com")) {
-            throw new Error("Detected account email was not privacy masked");
-          }
-          if (results.outerHTML.includes("user@example.com")) {
-            throw new Error("Raw detected account email leaked into onboarding markup");
-          }
-          return true;
-        })()
-      `);
-      await sleep(400);
-    }
+    await win.webContents.executeJavaScript(`
+      (() => {
+        const step = ${JSON.stringify(step)};
+        if (step !== "permissions" && !document.querySelector("[data-onboarding-back], #btn-back")) {
+          throw new Error("Missing onboarding Back control for " + step);
+        }
+        if (step === "permissions" && document.querySelector("[data-onboarding-back], #btn-back")) {
+          throw new Error("First onboarding step must not show Back");
+        }
+        return true;
+      })()
+    `);
     await capture(`onboard-${step}.png`, "#view > *");
   }
 
@@ -682,7 +652,7 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`
       (async () => {
         window.__rr_goto_page("combos");
-        document.querySelector("button[data-edit]")?.click();
+        document.querySelector("button[data-edit-index]")?.click();
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         let account = document.getElementById("c-add-account");
         let model = document.getElementById("c-add-model");
@@ -1151,7 +1121,7 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript(`
     (() => {
       window.__rr_goto_page("combos");
-      document.querySelector("button[data-edit]")?.click();
+      document.querySelector("button[data-edit-index]")?.click();
       return true;
     })()
   `);

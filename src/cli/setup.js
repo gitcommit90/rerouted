@@ -35,27 +35,6 @@ async function createPassword(prompts, invoke, output) {
   }
 }
 
-async function importDetected(prompts, invoke, output) {
-  if (!(await prompts.confirm("Scan this machine for supported provider credentials?"))) return;
-  output.write("Scanning local credential files…\n");
-  const result = await invoke("app:detect-providers");
-  const found = result.found || [];
-  if (!found.length) {
-    output.write("No supported credentials were found.\n");
-    return;
-  }
-  const indexes = await prompts.multiSelect(
-    "Import detected accounts",
-    found.map((item) => ({
-      label: `${item.name || item.type}${item.email ? ` · ${item.email}` : ""} (${item.source})`,
-    })),
-    { defaultAll: true }
-  );
-  if (!indexes.length) return;
-  await invoke("app:import-detected", indexes.map((index) => found[index].id));
-  output.write(`Imported ${indexes.length} account${indexes.length === 1 ? "" : "s"}.\n`);
-}
-
 async function connectOauth(prompts, invoke, output) {
   output.write(`\n${OAUTH_NOTICE}\n`);
   while (await prompts.confirm("Connect an OAuth subscription account now?", { defaultValue: false })) {
@@ -172,8 +151,6 @@ async function runFirstSetup({ prompts, controlPlane, dashboardUrl, output = pro
 
   await invoke("app:set-onboarding-step", "admin-password");
   await createPassword(prompts, invoke, output);
-  await invoke("app:set-onboarding-step", "auto-detect");
-  await importDetected(prompts, invoke, output);
   await invoke("app:set-onboarding-step", "oauth-providers");
   await connectOauth(prompts, invoke, output);
   await invoke("app:set-onboarding-step", "api-keys");

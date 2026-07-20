@@ -19,8 +19,6 @@ const PUBLIC_ONBOARDING_CHANNELS = new Set([
   "app:get-state",
   "app:set-onboarding-step",
   "app:set-admin-password",
-  "app:detect-providers",
-  "app:import-detected",
   "app:oauth-start",
   "app:oauth-status",
   "app:oauth-cancel",

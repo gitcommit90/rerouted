@@ -2,7 +2,6 @@
 
 const { hydrateUsageIdentity } = require("./usage");
 const { hashPassword, verifyPassword, generateId, generateApiKey } = require("./password");
-const { detectAll, summarizeDetected } = require("./detect");
 const { startOAuth, completeOAuth, oauthStatus, clearPending } = require("./oauth");
 const {
   canInvoke,
@@ -54,7 +53,6 @@ function createControlPlane({
     throw new TypeError("Control plane requires the ReRouted runtime services");
   }
 
-  let detectedCache = [];
   const handlers = new Map();
   const handle = (channel, handler) => {
     if (handlers.has(channel)) throw new Error(`Duplicate control-plane handler: ${channel}`);
@@ -173,9 +171,11 @@ function createControlPlane({
   });
 
 handle("app:set-onboarding-step", async (_e, step) => {
+  if (!ONBOARDING_STEPS.includes(step) || step === "done") {
+    return { ok: false, error: "Unknown onboarding step" };
+  }
   store.update((cfg) => {
     cfg.onboardingStep = step;
-    if (step === "done") cfg.onboardingComplete = true;
   });
   return { ok: true };
 });
@@ -231,45 +231,6 @@ handle("app:change-admin-password", async (_e, { current, next }) => {
   const hash = await hashPassword(next);
   store.update((c) => {
     c.adminPasswordHash = hash;
-  });
-  return { ok: true };
-});
-
-handle("app:detect-providers", async () => {
-  detectedCache = await detectAll();
-  return { ok: true, found: summarizeDetected(detectedCache) };
-});
-
-handle("app:import-detected", async (_e, ids) => {
-  const want = new Set(ids || []);
-  const toImport = detectedCache.filter((d) => want.has(d.id));
-  store.update((cfg) => {
-    for (const d of toImport) {
-      // Avoid duplicate by type+email/source path
-      const exists = cfg.providers.some(
-        (p) =>
-          p.type === d.type &&
-          ((d.email && p.email === d.email) || (d.path && p.importPath === d.path))
-      );
-      if (exists) continue;
-      cfg.providers.push({
-        id: d.id || generateId("prov"),
-        type: d.type,
-        name: d.name,
-        email: d.email,
-        accessToken: d.accessToken,
-        refreshToken: d.refreshToken,
-        accountId: d.accountId,
-        projectId: d.projectId,
-        clientId: d.clientId,
-        clientSecret: d.clientSecret,
-        models: d.models,
-        enabled: true,
-        importPath: d.path,
-        source: d.source,
-        createdAt: Date.now(),
-      });
-    }
   });
   return { ok: true };
 });
@@ -581,6 +542,21 @@ handle("app:set-model-enabled", async (_e, { providerId, modelId, enabled }) => 
     }
   });
   return { ok: true };
+});
+
+handle("app:set-all-models-enabled", async (_e, { providerId, enabled }) => {
+  let updated = 0;
+  store.update((cfg) => {
+    const provider = cfg.providers.find((item) => item.id === providerId);
+    if (!provider || !Array.isArray(provider.models)) return;
+    provider.models = provider.models.map((model) => {
+      updated += 1;
+      return typeof model === "string"
+        ? { id: model, name: model, enabled: !!enabled }
+        : { ...model, enabled: !!enabled };
+    });
+  });
+  return { ok: updated > 0, updated, enabled: !!enabled };
 });
 
 handle("app:add-model", async (_e, { providerId, modelId }) => {

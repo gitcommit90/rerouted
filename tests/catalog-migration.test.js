@@ -14,6 +14,18 @@ function migrateProvider(provider) {
 }
 
 describe("OAuth catalog migration", () => {
+  it("moves interrupted legacy autodetect onboarding to OAuth connections", () => {
+    const cfg = migrate({
+      version: 8,
+      onboardingComplete: false,
+      onboardingStep: "auto-detect",
+      providers: [],
+      combos: [],
+    });
+    assert.equal(cfg.onboardingStep, "oauth-providers");
+    assert.equal(cfg.onboardingComplete, false);
+  });
+
   it("removes retired built-ins while preserving current state and custom models", () => {
     const provider = migrateProvider({
       id: "prov_chatgpt",

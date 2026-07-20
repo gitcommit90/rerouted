@@ -6,6 +6,7 @@ const { describe, it } = require("node:test");
 const {
   buildRouteAccountOptions,
   modelsForRouteAccount,
+  moveRouteMember,
 } = require("../src/renderer/route-picker");
 
 describe("route member picker", () => {
@@ -96,5 +97,15 @@ describe("route member picker", () => {
         { connectionIndex: 2, connectionCount: 2 },
       ]
     );
+  });
+
+  it("moves a route member to the requested position for drag or keyboard controls", () => {
+    const members = [{ model: "a" }, { model: "b" }, { model: "c" }];
+    assert.equal(moveRouteMember(members, 0, 2), members);
+    assert.deepEqual(members.map((member) => member.model), ["b", "c", "a"]);
+    moveRouteMember(members, 2, 1);
+    assert.deepEqual(members.map((member) => member.model), ["b", "a", "c"]);
+    moveRouteMember(members, -1, 4);
+    assert.deepEqual(members.map((member) => member.model), ["b", "a", "c"]);
   });
 });

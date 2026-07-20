@@ -53,7 +53,27 @@
     return (accounts || []).find((account) => account.id === accountId)?.models || [];
   }
 
-  const api = { buildRouteAccountOptions, modelsForRouteAccount };
+  function moveRouteMember(members, fromIndex, toIndex) {
+    if (!Array.isArray(members)) return members;
+    const from = Number(fromIndex);
+    const to = Number(toIndex);
+    if (
+      !Number.isInteger(from) ||
+      !Number.isInteger(to) ||
+      from < 0 ||
+      to < 0 ||
+      from >= members.length ||
+      to >= members.length ||
+      from === to
+    ) {
+      return members;
+    }
+    const [member] = members.splice(from, 1);
+    members.splice(to, 0, member);
+    return members;
+  }
+
+  const api = { buildRouteAccountOptions, modelsForRouteAccount, moveRouteMember };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (root) root.ReroutedRoutePicker = api;
 })(typeof window !== "undefined" ? window : null);

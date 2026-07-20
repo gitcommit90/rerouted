@@ -48,6 +48,17 @@ describe("shared control plane", () => {
     assert.equal(initial.appVersion, "9.8.7");
     assert.equal(initial.update.status, "unsupported");
     assert.match(initial.update.error, /package manager/i);
+    assert.equal(initial.steps.includes("auto-detect"), false);
+
+    assert.deepEqual(await invoke("app:set-onboarding-step", "oauth-providers"), {
+      ok: true,
+    });
+    assert.equal((await invoke("app:get-state")).onboardingComplete, false);
+    assert.deepEqual(await invoke("app:set-onboarding-step", "done"), {
+      ok: false,
+      error: "Unknown onboarding step",
+    });
+    assert.equal((await invoke("app:get-state")).onboardingComplete, false);
 
     assert.deepEqual(await invoke("app:set-admin-password", "correct horse"), { ok: true });
     assert.deepEqual(await invoke("app:complete-onboarding"), { ok: true });
@@ -90,5 +101,35 @@ describe("shared control plane", () => {
       code: "unsupported_action",
       error: "Unsupported ReRouted action.",
     });
+  });
+
+  it("toggles every model on an account in one update", async () => {
+    const runtime = tempRuntime();
+    runtime.store.update((cfg) => {
+      cfg.providers.push({
+        id: "prov_bulk",
+        type: "openrouter",
+        name: "OpenRouter",
+        models: [
+          { id: "model-a", name: "Model A", enabled: true },
+          "model-b",
+        ],
+      });
+    });
+    const invoke = (channel, ...args) =>
+      runtime.controlPlane.invoke(channel, args, { harness: true });
+
+    assert.deepEqual(await invoke("app:set-all-models-enabled", {
+      providerId: "prov_bulk",
+      enabled: false,
+    }), { ok: true, updated: 2, enabled: false });
+    assert.deepEqual(
+      runtime.store.load().providers[0].models.map((model) => model.enabled),
+      [false, false]
+    );
+    assert.deepEqual(await invoke("app:set-all-models-enabled", {
+      providerId: "missing",
+      enabled: true,
+    }), { ok: false, updated: 0, enabled: true });
   });
 });
