@@ -1593,14 +1593,18 @@ summary:focus-visible,
   background:
     linear-gradient(145deg, rgba(239, 91, 42, 0.08), transparent 58%),
     var(--paper-strong);
-  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 80ms ease, box-shadow 80ms ease;
 }
 
 .route-card:hover,
 .route-card:focus-within {
   border-color: rgba(239, 91, 42, 0.55);
   box-shadow: 0 8px 20px rgba(58, 49, 35, 0.08);
-  transform: translateY(-1px);
+}
+
+.route-card:active {
+  border-color: rgba(239, 91, 42, 0.75);
+  box-shadow: none;
 }
 
 .route-card-hit {
@@ -1611,6 +1615,15 @@ summary:focus-visible,
   border-radius: inherit;
   background: transparent;
   cursor: pointer;
+}
+
+.route-card-hit:active {
+  background: rgba(239, 91, 42, 0.04);
+}
+
+.route-editor {
+  margin: 0 0 0 7px;
+  animation: none;
 }
 
 .route-card-top {
