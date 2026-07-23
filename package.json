@@ -1,7 +1,7 @@
 {
   "name": "@gitcommit90/rerouted",
   "productName": "ReRouted",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "A local AI router for connected accounts, models, named routes, and automatic fallback.",
   "author": "gitcommit90",
   "license": "MIT",

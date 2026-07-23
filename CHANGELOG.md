@@ -9,6 +9,12 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-07-23
+
+### Fixed
+
+- Reasoning models no longer fail with a synthetic 408 and temporary account lock when Claude thinking or Responses reasoning is the first streamed output.
+
 ## [0.5.7] - 2026-07-20
 
 ### Changed
@@ -88,7 +94,8 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 See [GitHub Releases](https://github.com/gitcommit90/rerouted/releases) for artifact digests and notes prior to the Keep a Changelog narrative. Notable themes in late 0.4.x included signed/notarized distribution, in-app updates, named routes, OAuth account pools, OpenAI chat completions and Responses routing, and launch hardening.
 
-[Unreleased]: https://github.com/gitcommit90/rerouted/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/gitcommit90/rerouted/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.8
 [0.5.7]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.7
 [0.5.5]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.5
 [0.5.4]: https://github.com/gitcommit90/rerouted/releases/tag/v0.5.4

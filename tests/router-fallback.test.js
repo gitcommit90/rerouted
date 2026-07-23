@@ -48,6 +48,19 @@ function chatgptAccount(id, token, createdAt, extra = {}) {
   };
 }
 
+function claudeAccount(id, token, createdAt, extra = {}) {
+  return {
+    id,
+    type: "claude",
+    name: id,
+    accessToken: token,
+    models: [{ id: "claude-fable-5", name: "Claude Fable 5", enabled: true }],
+    enabled: true,
+    createdAt,
+    ...extra,
+  };
+}
+
 function captureLogger() {
   const entries = [];
   const add = (level) => (message, meta) => entries.push({ level, message, meta });
@@ -1074,6 +1087,165 @@ describe("same-provider OAuth account fallback", () => {
 
     assert.equal(timedOut, false);
     assert.match(chunks.join(""), /second/);
+  });
+
+  it("does not time out a Claude stream that starts with native thinking", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({ providers: [claudeAccount("prov_a", "token-a", 100)] });
+    const encoder = new TextEncoder();
+    let timedOut = false;
+    const router = createRouter({
+      store,
+      timeoutMs: 20,
+      logger: captureLogger(),
+      fetchImpl: async (_url, options) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  [
+                    `event: content_block_start`,
+                    `data: ${JSON.stringify({
+                      type: "content_block_start",
+                      index: 0,
+                      content_block: { type: "thinking", thinking: "" },
+                    })}`,
+                    "",
+                    `event: content_block_delta`,
+                    `data: ${JSON.stringify({
+                      type: "content_block_delta",
+                      index: 0,
+                      delta: { type: "thinking_delta", thinking: "Working through it" },
+                    })}`,
+                    "",
+                    "",
+                  ].join("\n")
+                )
+              );
+              options.signal.addEventListener(
+                "abort",
+                () => {
+                  timedOut = true;
+                  controller.error(options.signal.reason || new Error("timed out"));
+                },
+                { once: true }
+              );
+              setTimeout(() => {
+                controller.enqueue(
+                  encoder.encode(
+                    [
+                      `event: content_block_stop`,
+                      `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+                      "",
+                      `event: content_block_start`,
+                      `data: ${JSON.stringify({
+                        type: "content_block_start",
+                        index: 1,
+                        content_block: { type: "text", text: "" },
+                      })}`,
+                      "",
+                      `event: content_block_delta`,
+                      `data: ${JSON.stringify({
+                        type: "content_block_delta",
+                        index: 1,
+                        delta: { type: "text_delta", text: "answer" },
+                      })}`,
+                      "",
+                      "",
+                    ].join("\n")
+                  )
+                );
+                controller.close();
+              }, 50);
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        ),
+    });
+
+    const body = {
+      model: "claude/claude-fable-5",
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+    };
+    body[Symbol.for("rerouted.anthropic.metadata")] = {};
+    const result = await router.chatCompletions({ body });
+    const chunks = [];
+    await result.streamPipe({ write: (chunk) => chunks.push(String(chunk)) });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(timedOut, false);
+    assert.match(chunks.join(""), /Working through it/);
+    assert.match(chunks.join(""), /answer/);
+  });
+
+  it("does not time out a Responses stream that starts with reasoning", async () => {
+    const store = createStore(tmpConfig());
+    store.seed({ providers: [chatgptAccount("prov_a", "token-a", 100)] });
+    const encoder = new TextEncoder();
+    let timedOut = false;
+    const router = createRouter({
+      store,
+      timeoutMs: 20,
+      logger: captureLogger(),
+      fetchImpl: async (_url, options) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `event: response.reasoning_summary_text.delta\ndata: ${JSON.stringify({
+                    type: "response.reasoning_summary_text.delta",
+                    delta: "Working through it",
+                  })}\n\n`
+                )
+              );
+              options.signal.addEventListener(
+                "abort",
+                () => {
+                  timedOut = true;
+                  controller.error(options.signal.reason || new Error("timed out"));
+                },
+                { once: true }
+              );
+              setTimeout(() => {
+                controller.enqueue(
+                  encoder.encode(
+                    `event: response.output_text.delta\ndata: ${JSON.stringify({
+                      type: "response.output_text.delta",
+                      delta: "answer",
+                    })}\n\n`
+                  )
+                );
+                controller.enqueue(
+                  encoder.encode(
+                    `event: response.completed\ndata: ${JSON.stringify({
+                      type: "response.completed",
+                    })}\n\n`
+                  )
+                );
+                controller.close();
+              }, 50);
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        ),
+    });
+
+    const result = await router.chatCompletions({
+      body: {
+        model: "chatgpt/gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      },
+    });
+    const chunks = [];
+    await result.streamPipe({ write: (chunk) => chunks.push(String(chunk)) });
+
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    assert.equal(timedOut, false);
+    assert.match(chunks.join(""), /answer/);
   });
 
   it("propagates a gateway client disconnect through an active stream", async () => {
