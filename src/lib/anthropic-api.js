@@ -378,6 +378,12 @@ function writeEvent(sink, type, data) {
   sink.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+// Claude Code filters SSE comments and ping events before its stream-event
+// watchdog. This zero-impact delta reaches that watchdog without adding content
+// or completing the response; the real final delta remains authoritative.
+const ANTHROPIC_SSE_HEARTBEAT =
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":null,"stop_sequence":null},"usage":{"output_tokens":0}}\n\n';
+
 async function pipeChatCompletionsSseToAnthropic(streamPipe, sink, requestedModel) {
   const parser = createSseParser();
   const id = messageId();
@@ -571,6 +577,7 @@ module.exports = {
   toChatCompletionsBody,
   fromChatCompletion,
   pipeChatCompletionsSseToAnthropic,
+  ANTHROPIC_SSE_HEARTBEAT,
   toAnthropicError,
   estimateInputTokens,
   anthropicUsage,

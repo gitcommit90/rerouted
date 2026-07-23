@@ -24,6 +24,57 @@ function formatSseData(obj) {
 }
 
 const SSE_DONE = "data: [DONE]\n\n";
+const SSE_KEEPALIVE = ": keepalive\n\n";
+const DEFAULT_SSE_HEARTBEAT_MS = 25_000;
+
+/**
+ * Wrap a client-facing SSE sink and emit the configured liveness frame whenever
+ * the stream has otherwise been silent for the configured interval.
+ */
+function createSseHeartbeat(
+  res,
+  { intervalMs = DEFAULT_SSE_HEARTBEAT_MS, heartbeat = SSE_KEEPALIVE } = {}
+) {
+  let timer = null;
+  let stopped = false;
+
+  function schedule() {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    if (stopped || intervalMs <= 0) return;
+    timer = setTimeout(() => {
+      timer = null;
+      if (stopped || res.writableEnded || res.destroyed) return;
+      res.write(heartbeat);
+      schedule();
+    }, intervalMs);
+    timer.unref?.();
+  }
+
+  const sink = {
+    write(...args) {
+      const written = res.write(...args);
+      schedule();
+      return written;
+    },
+    get writableEnded() {
+      return res.writableEnded;
+    },
+    get destroyed() {
+      return res.destroyed;
+    },
+  };
+
+  schedule();
+  return {
+    sink,
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    },
+  };
+}
 
 /**
  * Parse SSE text stream lines into { event, data } objects.
@@ -126,6 +177,9 @@ module.exports = {
   openaiChunk,
   formatSseData,
   SSE_DONE,
+  SSE_KEEPALIVE,
+  DEFAULT_SSE_HEARTBEAT_MS,
+  createSseHeartbeat,
   createSseParser,
   chunkToString,
   pipeOpenAiSse,

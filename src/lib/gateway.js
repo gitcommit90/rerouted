@@ -3,6 +3,7 @@
 const http = require("node:http");
 const { DEFAULT_PORT } = require("./constants");
 const logger = require("./logger");
+const { createSseHeartbeat, DEFAULT_SSE_HEARTBEAT_MS } = require("./sse");
 const {
   toChatCompletionsBody,
   fromChatCompletion,
@@ -15,9 +16,14 @@ const {
   pipeChatCompletionsSseToAnthropic,
   toAnthropicError,
   estimateInputTokens,
+  ANTHROPIC_SSE_HEARTBEAT,
 } = require("./anthropic-api");
 
 const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
+
+function isClaudeCodeRequest(req) {
+  return /^claude-cli\//i.test(String(req.headers["user-agent"] || ""));
+}
 
 /**
  * OpenAI-compatible HTTP gateway.
@@ -31,6 +37,7 @@ function createGateway({
   port = DEFAULT_PORT,
   host = "127.0.0.1",
   maxBodyBytes = MAX_JSON_BODY_BYTES,
+  sseHeartbeatMs = DEFAULT_SSE_HEARTBEAT_MS,
   requestActivity,
 } = {}) {
   let server = null;
@@ -329,13 +336,29 @@ function createGateway({
               "Cache-Control": "no-cache",
               Connection: "keep-alive",
             });
+            const heartbeat = anthropicRequest && isClaudeCodeRequest(req)
+              ? createSseHeartbeat(res, {
+                  intervalMs: sseHeartbeatMs,
+                  heartbeat: ANTHROPIC_SSE_HEARTBEAT,
+                })
+              : null;
+            const streamSink = heartbeat?.sink || res;
             try {
               if (responsesRequest) {
-                await pipeChatCompletionsSseToResponses(result.streamPipe, res, body.model, body);
+                await pipeChatCompletionsSseToResponses(
+                  result.streamPipe,
+                  streamSink,
+                  body.model,
+                  body
+                );
               } else if (anthropicRequest) {
-                await pipeChatCompletionsSseToAnthropic(result.streamPipe, res, body.model);
+                await pipeChatCompletionsSseToAnthropic(
+                  result.streamPipe,
+                  streamSink,
+                  body.model
+                );
               } else {
-                await result.streamPipe(res);
+                await result.streamPipe(streamSink);
               }
               activityStatus = 200;
               activityOutcome = "success";
@@ -349,6 +372,8 @@ function createGateway({
                    );
                  }
               }
+            } finally {
+              heartbeat?.stop();
             }
             if (!res.writableEnded) res.end();
             return;
