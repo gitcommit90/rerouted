@@ -423,6 +423,17 @@ function hasProductiveResponsesEvent(text) {
         return true;
       }
       if (
+        [
+          "response.reasoning_summary_text.delta",
+          "response.reasoning_text.delta",
+        ].includes(type) &&
+        ((typeof data?.delta === "string" && data.delta.length > 0) ||
+          (typeof data?.delta?.text === "string" && data.delta.text.length > 0) ||
+          (typeof data?.text === "string" && data.text.length > 0))
+      ) {
+        return true;
+      }
+      if (
         type === "response.function_call_arguments.delta" &&
         typeof data?.delta === "string" &&
         data.delta.length > 0
@@ -439,15 +450,16 @@ function hasProductiveResponsesEvent(text) {
       }
       if (
         type === "content_block_start" &&
-        data?.content_block?.type === "tool_use" &&
-        typeof data.content_block.name === "string" &&
-        data.content_block.name.length > 0
+        ((data?.content_block?.type === "tool_use" &&
+          typeof data.content_block.name === "string" &&
+          data.content_block.name.length > 0) ||
+          ["thinking", "redacted_thinking"].includes(data?.content_block?.type))
       ) {
         return true;
       }
       if (
         type === "content_block_delta" &&
-        [data?.delta?.text, data?.delta?.partial_json].some(
+        [data?.delta?.text, data?.delta?.partial_json, data?.delta?.thinking].some(
           (value) => typeof value === "string" && value.length > 0
         )
       ) {
