@@ -1797,6 +1797,157 @@ describe("SSE chunk decoding", () => {
     assert.equal(chunkToString(u8), text);
     assert.notEqual(String(u8), text);
   });
+
+  it("keeps Anthropic Messages clients alive during downstream silence", async () => {
+    const store = createStore(tmpConfig());
+    const apiKey = store.load().apiKey;
+    const gateway = createGateway({
+      store,
+      sseHeartbeatMs: 10,
+      router: {
+        async chatCompletions() {
+          return {
+            ok: true,
+            stream: true,
+            streamPipe: async (sink) => {
+              await new Promise((resolve) => setTimeout(resolve, 35));
+              sink.write(
+                `data: ${JSON.stringify({
+                  choices: [{ delta: { role: "assistant", content: "OK" } }],
+                })}\n\n`
+              );
+              sink.write(
+                `data: ${JSON.stringify({
+                  choices: [{ delta: {}, finish_reason: "stop" }],
+                })}\n\n`
+              );
+              sink.write("data: [DONE]\n\n");
+            },
+          };
+        },
+      },
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/messages`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "User-Agent": "claude-cli/2.1.218 (external, sdk-cli)",
+        },
+        body: JSON.stringify({
+          model: "route",
+          max_tokens: 8,
+          messages: [],
+          stream: true,
+        }),
+      });
+      const text = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(
+        text,
+        /event: message_delta\ndata: \{"type":"message_delta","delta":\{"stop_reason":null,"stop_sequence":null\},"usage":\{"output_tokens":0\}\}\n\n/
+      );
+      assert.match(text, /event: content_block_delta/);
+      const heartbeatBlock = text.split("\n\n").find(
+        (block) => block.startsWith("event: message_delta") &&
+          block.includes('"stop_reason":null')
+      );
+      const heartbeatData = JSON.parse(
+        heartbeatBlock.split("\n").find((line) => line.startsWith("data: ")).slice(6)
+      );
+      assert.deepEqual(heartbeatData.usage, { output_tokens: 0 });
+
+      const genericResponse = await fetch(
+        `http://127.0.0.1:${server.address().port}/v1/messages`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "route",
+            max_tokens: 8,
+            messages: [],
+            stream: true,
+          }),
+        }
+      );
+      const genericText = await genericResponse.text();
+      assert.equal(genericResponse.status, 200);
+      assert.equal(
+        genericText.split("\n\n").filter(
+          (block) => block.startsWith("event: message_delta") &&
+            block.includes('"stop_reason":null')
+        ).length,
+        0
+      );
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("still cancels an active stream when the client disconnects", async () => {
+    const store = createStore(tmpConfig());
+    const apiKey = store.load().apiKey;
+    let finishActivity;
+    const activityEnded = new Promise((resolve) => {
+      finishActivity = resolve;
+    });
+    const gateway = createGateway({
+      store,
+      sseHeartbeatMs: 10,
+      requestActivity: {
+        begin: () => "activity-1",
+        route() {},
+        end: (_id, result) => finishActivity(result),
+      },
+      router: {
+        async chatCompletions({ signal }) {
+          return {
+            ok: true,
+            stream: true,
+            streamPipe: async () => new Promise((resolve, reject) => {
+              if (signal.aborted) reject(signal.reason);
+              else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            }),
+          };
+        },
+      },
+    });
+    const server = http.createServer((req, res) => gateway.handle(req, res));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      await new Promise((resolve, reject) => {
+        const request = http.request({
+          host: "127.0.0.1",
+          port: server.address().port,
+          path: "/v1/messages",
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "User-Agent": "claude-cli/2.1.218 (external, sdk-cli)",
+          },
+        }, (response) => {
+          let received = "";
+          response.on("data", (chunk) => {
+            received += String(chunk);
+            if (!received.includes('"stop_reason":null')) return;
+            response.destroy();
+            resolve();
+          });
+        });
+        request.once("error", reject);
+        request.end(JSON.stringify({ model: "route", max_tokens: 8, messages: [], stream: true }));
+      });
+      assert.deepEqual(await activityEnded, { status: 499, outcome: "canceled" });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
 });
 
 describe("OAuth → OpenAI SSE translation pipes", () => {
