@@ -109,21 +109,19 @@ function generateBillingHeader(payload) {
 }
 
 /**
- * Strip third-party agent structure that can trigger extra-usage or proxy
- * detection on OAuth traffic.
+ * Preserve client system context while moving it into the provider-compatible
+ * reminder location used for OAuth traffic. Truncating this text is unsafe:
+ * callers rely on late system blocks for policy, memory, and handoff state.
  */
 function sanitizeForwardedSystemPrompt(text) {
-  if (!String(text || "").trim()) return "";
-  // Keep a short neutral reminder; full client system prompts look like non-CLI agents.
+  const forwarded = String(text || "").trim();
+  if (!forwarded) return "";
   return [
     "Use the available tools when needed to help with software engineering tasks.",
     "Keep responses concise and focused on the user's request.",
     "Prefer acting on the user's task over describing product-specific workflows.",
-    // Preserve a short slice of original context if useful
-    String(text).trim().slice(0, 400),
-  ]
-    .filter(Boolean)
-    .join("\n");
+    forwarded,
+  ].join("\n");
 }
 
 /** Wrap forwarded system context in provider-compatible reminder blocks. */

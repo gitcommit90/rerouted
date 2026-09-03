@@ -745,10 +745,12 @@ describe("OAuth refresh against mock", () => {
 
 describe("claude oauth request shaping", () => {
   it("applyCloaking injects CC system blocks + metadata; moves client system to user", () => {
+    const lateSystemSentinel = `LATE_SYSTEM_HANDOFF_${"z".repeat(1600)}_END`;
     const base = claude.toAnthropicBody(
       {
         messages: [
           { role: "system", content: "You are a custom app agent with secret tools." },
+          { role: "system", content: lateSystemSentinel },
           { role: "user", content: "hi" },
         ],
         max_tokens: 8,
@@ -774,6 +776,9 @@ describe("claude oauth request shaping", () => {
       ? userContent.map((b) => b.text || "").join("\n")
       : String(userContent);
     assert.ok(userText.includes("<system-reminder>"), userText.slice(0, 200));
+    assert.ok(userText.includes("You are a custom app agent with secret tools."));
+    assert.ok(userText.includes(lateSystemSentinel), "late and long client system context must survive OAuth request shaping");
+    assert.ok(userText.includes(`${lateSystemSentinel}\n\nIMPORTANT:`), "the complete sentinel must precede the reminder footer");
     const uid = JSON.parse(cloaked.metadata.user_id);
     assert.equal(uid.session_id, sessionId);
     assert.ok(uid.device_id && uid.account_uuid);
