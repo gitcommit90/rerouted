@@ -3,6 +3,7 @@
 const { redactString } = require("./logger");
 
 const MAX_ERROR_BODY_LENGTH = 4096;
+const DEFAULT_MODEL_TEST_TIMEOUT_MS = 60_000;
 
 function safeErrorBody(value, maxLength = MAX_ERROR_BODY_LENGTH) {
   const body = redactString(value);
@@ -85,10 +86,22 @@ function logFailure(logger, label, status, body) {
   logger?.error?.(`Model test failed for ${label}`, { status, body: safeErrorBody(body) });
 }
 
-async function runProviderModelTest({ adapter, provider, model, onTokenRefresh, logger } = {}) {
+async function runProviderModelTest({ adapter, provider, model, onTokenRefresh, logger, timeoutMs = DEFAULT_MODEL_TEST_TIMEOUT_MS } = {}) {
   const label = `${provider?.name || provider?.type || "provider"}/${model}`;
+  const controller = new AbortController();
+  const boundedTimeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_MODEL_TEST_TIMEOUT_MS);
+  const timeoutError = new Error(`model test timed out after ${boundedTimeoutMs}ms`);
+  timeoutError.name = "TimeoutError";
+  timeoutError.code = "ETIMEDOUT";
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, boundedTimeoutMs);
+  });
   try {
-    const result = await adapter.chat(
+    const request = adapter.chat(
       { ...provider },
       {
         model,
@@ -99,9 +112,11 @@ async function runProviderModelTest({ adapter, provider, model, onTokenRefresh, 
           stream: false,
         },
         stream: false,
+        signal: controller.signal,
         onTokenRefresh,
       }
     );
+    const result = await Promise.race([request, timeout]);
     const response = result && result.response ? result.response : result;
     const inspection = await inspectModelTestResponse(response);
     if (!inspection.ok) {
@@ -116,10 +131,13 @@ async function runProviderModelTest({ adapter, provider, model, onTokenRefresh, 
     const message = safeErrorBody(error?.message || String(error));
     logFailure(logger, label, error?.status || null, message);
     return { ok: false, error: `Model test failed: ${message}` };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 module.exports = {
+  DEFAULT_MODEL_TEST_TIMEOUT_MS,
   MAX_ERROR_BODY_LENGTH,
   bodyHasUpstreamError,
   inspectModelTestResponse,

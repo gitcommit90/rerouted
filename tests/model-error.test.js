@@ -116,3 +116,25 @@ it("bounds and redacts thrown adapter model-test failures", async () => {
   assert.equal(entries[0].meta.body.includes(secret), false);
   assert.match(entries[0].meta.body, /\[truncated \d+ chars\]/);
 });
+
+
+it("bounds and aborts a model test when the provider never responds", async () => {
+  let receivedSignal;
+  const started = Date.now();
+  const result = await runProviderModelTest({
+    adapter: {
+      chat: async (_provider, options) => {
+        receivedSignal = options.signal;
+        return await new Promise(() => {});
+      },
+    },
+    provider: { type: "nvidia", name: "NVIDIA NIM" },
+    model: "model-that-hangs",
+    timeoutMs: 25,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(receivedSignal.aborted, true);
+  assert.match(result.error, /timed out after 25ms/);
+  assert.ok(Date.now() - started < 1000);
+});
