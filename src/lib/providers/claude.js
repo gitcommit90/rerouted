@@ -9,7 +9,7 @@ const cfg = OAUTH.claude;
 const ANTHROPIC_METADATA = Symbol.for("rerouted.anthropic.metadata");
 
 /** Provider-compatible request metadata and system-block shaping. */
-const CLAUDE_CLI_VERSION = "2.1.251";
+const CLAUDE_CLI_VERSION = "2.1.280";
 const CC_ENTRYPOINT = "cli";
 
 const ANTHROPIC_BETA =

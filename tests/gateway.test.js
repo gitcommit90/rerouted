@@ -831,14 +831,14 @@ describe("claude oauth request shaping", () => {
     const h = seen.opts.headers;
     assert.equal(h["X-App"], "cli");
     assert.ok(String(h["User-Agent"]).startsWith("claude-cli/"));
-    assert.ok(String(h["User-Agent"]).includes("2.1.251"), "new Claude models require the current supported CLI fingerprint");
+    assert.ok(String(h["User-Agent"]).includes("2.1.280"), "new Claude models require the current supported CLI fingerprint");
     assert.ok(String(h["User-Agent"]).includes("(external, cli)"));
     assert.ok(h["X-Stainless-Os"]);
     assert.ok(h["X-Claude-Code-Session-Id"]);
     assert.ok(String(h["Anthropic-Beta"]).includes("oauth-2025-04-20"));
     const body = JSON.parse(seen.opts.body);
     assert.ok(body.system?.[0]?.text?.startsWith("x-anthropic-billing-header:"));
-    assert.ok(body.system[0].text.includes("cc_version=2.1.251."));
+    assert.ok(body.system[0].text.includes("cc_version=2.1.280."));
     assert.equal(body.system.length, 3);
     assert.ok(body.metadata?.user_id);
   });
