@@ -59,6 +59,62 @@ describe("provider-selected cache shaping", () => {
     }
   });
 
+  it("keeps Claude volatile context behind durable history and preserves OAuth cache boundaries", () => {
+    const payload = claude.toAnthropicBody({
+      messages: [
+        scoped("stable identity", "stable_instruction"),
+        scoped("volatile 12:34:56", "dynamic_context"),
+        { role: "user", content: "old task" },
+        { role: "assistant", content: "old answer" },
+        scoped("prior invocation boundary", "inline_context"),
+        scoped("current invocation 42", "dynamic_context"),
+        { role: "user", content: "current task" },
+      ],
+    }, "claude-opus-5-5", true);
+
+    const cloaked = claude.applyCloaking(payload, "sk-ant-oat-test", "00000000-0000-4000-8000-000000000000");
+    const blocks = cloaked.messages.flatMap((message) => message.content);
+    const stableIndex = blocks.findIndex((block) => block.text?.includes("stable identity"));
+    const oldTaskIndex = blocks.findIndex((block) => block.text === "old task");
+    const oldAnswerIndex = blocks.findIndex((block) => block.text === "old answer");
+    const inlineIndex = blocks.findIndex((block) => block.text?.includes("prior invocation boundary"));
+    const volatileIndex = blocks.findIndex((block) => block.text?.includes("volatile 12:34:56"));
+    const currentIndex = blocks.findIndex((block) => block.text === "current task");
+
+    assert.ok(stableIndex >= 0 && stableIndex < oldTaskIndex);
+    assert.ok(oldTaskIndex < oldAnswerIndex && oldAnswerIndex < inlineIndex);
+    assert.ok(inlineIndex < volatileIndex && volatileIndex < currentIndex);
+    assert.equal(blocks[stableIndex].cache_control.type, "ephemeral", "stable identity remains a reusable OAuth breakpoint");
+    assert.equal(blocks[inlineIndex].cache_control.type, "ephemeral", "the durable history tail is cached before volatile context");
+    assert.equal(blocks[volatileIndex].cache_control, undefined);
+    assert.doesNotMatch(blocks.slice(0, inlineIndex + 1).map((block) => block.text || "").join("\n"), /volatile 12:34:56|current invocation 42/);
+  });
+
+  it("reserves Claude breakpoints for stable/history prefixes before rolling tool results", () => {
+    const messages = [
+      scoped("stable identity", "stable_instruction"),
+      scoped("volatile", "dynamic_context"),
+      { role: "user", content: "old task" },
+      { role: "assistant", content: "old answer" },
+      scoped("current invocation", "dynamic_context"),
+      { role: "user", content: "current task" },
+      ...[1, 2, 3].flatMap((number) => [
+        { role: "assistant", content: "", tool_calls: [{ id: `t${number}`, type: "function", function: { name: "shell", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: `t${number}`, content: `result ${number}` },
+      ]),
+    ];
+    const payload = claude.toAnthropicBody({ messages }, "claude-opus-5-5", true);
+    const blocks = [...(Array.isArray(payload.system) ? payload.system : []), ...payload.messages.flatMap((message) => message.content)];
+    const marked = blocks.filter((block) => block.cache_control);
+    assert.equal(marked.length, 4);
+    assert.equal(blocks.find((block) => block.text === "stable identity").cache_control.type, "ephemeral");
+    assert.equal(blocks.find((block) => block.text === "old answer").cache_control.type, "ephemeral");
+    assert.equal(blocks.find((block) => block.type === "tool_result" && block.tool_use_id === "t1").cache_control, undefined);
+    for (const id of ["t2", "t3"]) {
+      assert.equal(blocks.find((block) => block.type === "tool_result" && block.tool_use_id === id).cache_control.type, "ephemeral");
+    }
+  });
+
   it("does not leak provider-selected cache keys to arbitrary compatible servers", async () => {
     let sent;
     await openaiCompat.chat({ baseUrl: "https://custom.test/v1", apiKey: "key" }, {
