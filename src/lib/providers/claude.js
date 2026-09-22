@@ -392,6 +392,45 @@ function contentBlocksFromMessage(msg) {
   return blocks;
 }
 
+function hasExplicitCacheControl(payload) {
+  const system = Array.isArray(payload.system) ? payload.system : [];
+  const messageBlocks = (payload.messages || []).flatMap((message) =>
+    Array.isArray(message.content) ? message.content : []
+  );
+  return [...system, ...messageBlocks].some((block) => block?.cache_control);
+}
+
+/** Apply Claude's four-breakpoint policy only after the router has selected
+ * Claude. Explicit client-authored breakpoints remain authoritative. */
+function applyAutomaticCacheControl(payload) {
+  if (hasExplicitCacheControl(payload)) return payload;
+
+  let baseBlock = null;
+  for (const message of payload.messages || []) {
+    if (message.role !== "user" || !Array.isArray(message.content)) continue;
+    if (message.content.some((block) => block?.type === "tool_result")) continue;
+    for (let index = message.content.length - 1; index >= 0; index--) {
+      const block = message.content[index];
+      if (block?.type === "text" || block?.type === "image") {
+        baseBlock = block;
+        break;
+      }
+    }
+  }
+  if (baseBlock) baseBlock.cache_control = { type: "ephemeral" };
+
+  const toolResults = [];
+  for (const message of payload.messages || []) {
+    for (const block of Array.isArray(message.content) ? message.content : []) {
+      if (block?.type === "tool_result") toolResults.push(block);
+    }
+  }
+  for (const block of toolResults.slice(-3)) {
+    block.cache_control = { type: "ephemeral" };
+  }
+  return payload;
+}
+
 /**
  * Convert OpenAI chat messages → Anthropic messages + system + tools.
  * Critical: tool_result must be in a user message; tool_use only on assistant.
@@ -521,7 +560,7 @@ function toAnthropicBody(body, model, stream) {
   for (const [key, value] of Object.entries(body[ANTHROPIC_METADATA]?.options || {})) {
     out[key] = JSON.parse(JSON.stringify(value));
   }
-  return applyClaudeEffort(out, body, model);
+  return applyAutomaticCacheControl(applyClaudeEffort(out, body, model));
 }
 
 function mapStopReason(stopReason) {
@@ -613,6 +652,8 @@ async function pipeAnthropicSseToOpenAi(
       prompt_tokens: 0,
       completion_tokens: 0,
       cached_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
       total_tokens: 0,
     };
     if (usage.input_tokens != null) current.prompt_tokens = Number(usage.input_tokens) || 0;
@@ -621,6 +662,11 @@ async function pipeAnthropicSseToOpenAi(
     }
     if (usage.cache_read_input_tokens != null) {
       current.cached_tokens = Number(usage.cache_read_input_tokens) || 0;
+      current.cache_read_tokens = Number(usage.cache_read_input_tokens) || 0;
+    }
+    if (usage.cache_creation_input_tokens != null) {
+      current.cache_write_tokens = Number(usage.cache_creation_input_tokens) || 0;
+      current.cache_creation_input_tokens = Number(usage.cache_creation_input_tokens) || 0;
     }
     current.total_tokens = current.prompt_tokens + current.completion_tokens;
     streamUsage = current;
@@ -861,5 +907,6 @@ module.exports = {
   generateFakeUserId,
   anthropicHeaders,
   stableSessionId,
+  applyAutomaticCacheControl,
   cfg,
 };

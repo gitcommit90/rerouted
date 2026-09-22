@@ -6,7 +6,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { KEYED_PRESETS, OAUTH } = require("./constants");
 
 const RECENT_UI = 80;
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const LEGACY_MIGRATION_KEY = "legacy_usage_json_migrated";
 
 const PERIODS = {
@@ -32,8 +32,22 @@ function extractUsage(openAiJson) {
         u.cached_tokens ||
         0
     ) || 0;
+  const cacheWrite = Number(
+    u.cache_creation_input_tokens ||
+      u.prompt_tokens_details?.cache_creation_tokens ||
+      u.input_tokens_details?.cache_creation_tokens ||
+      u.cache_write_tokens ||
+      0
+  ) || 0;
   const total = Number(u.total_tokens || prompt + completion) || prompt + completion;
-  return { prompt_tokens: prompt, completion_tokens: completion, cached_tokens: cached, total_tokens: total };
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    cached_tokens: cached,
+    cache_read_tokens: cached,
+    cache_write_tokens: cacheWrite,
+    total_tokens: total,
+  };
 }
 
 function canonicalProviderType(type) {
@@ -96,19 +110,41 @@ function numeric(value) {
 }
 
 function normalizedRow(entry, at = Date.now()) {
+  const providerType = canonicalProviderType(entry?.providerType) || null;
+  const promptTokens = numeric(entry?.prompt_tokens);
+  const cacheReadTokens = numeric(entry?.cache_read_tokens ?? entry?.cached_tokens);
+  const cacheWriteTokens = numeric(entry?.cache_write_tokens);
+  const excludesCacheTokens = providerType === "claude";
+  const tokenSemantics = entry?.token_semantics ||
+    (excludesCacheTokens ? "input_excludes_cache_read_write" : "input_includes_cache_read");
+  const logicalInputTokens = entry?.logical_input_tokens != null
+    ? numeric(entry.logical_input_tokens)
+    : excludesCacheTokens
+      ? promptTokens + cacheReadTokens + cacheWriteTokens
+      : promptTokens;
+  const uncachedInputTokens = entry?.uncached_input_tokens != null
+    ? numeric(entry.uncached_input_tokens)
+    : excludesCacheTokens
+      ? promptTokens + cacheWriteTokens
+      : Math.max(0, promptTokens - cacheReadTokens);
   return {
     at,
     model: entry?.model || null,
     upstream: entry?.upstream || null,
     providerId: entry?.providerId || null,
-    providerType: entry?.providerType || null,
+    providerType,
     providerName: entry?.providerName || null,
     accountAlias: entry?.accountAlias || null,
     status: numeric(entry?.status),
     stream: !!entry?.stream,
-    prompt_tokens: numeric(entry?.prompt_tokens),
+    prompt_tokens: promptTokens,
     completion_tokens: numeric(entry?.completion_tokens),
-    cached_tokens: numeric(entry?.cached_tokens),
+    cached_tokens: cacheReadTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_write_tokens: cacheWriteTokens,
+    uncached_input_tokens: uncachedInputTokens,
+    logical_input_tokens: logicalInputTokens,
+    token_semantics: tokenSemantics,
     total_tokens: numeric(entry?.total_tokens),
     error: entry?.error || null,
   };
@@ -128,6 +164,11 @@ function insertValues(row, preservePayload = false) {
     numeric(row.prompt_tokens),
     numeric(row.completion_tokens),
     numeric(row.cached_tokens),
+    numeric(row.cache_read_tokens ?? row.cached_tokens),
+    numeric(row.cache_write_tokens),
+    numeric(row.uncached_input_tokens ?? (row.providerType === "claude" ? numeric(row.prompt_tokens) : Math.max(0, numeric(row.prompt_tokens) - numeric(row.cached_tokens)))),
+    numeric(row.logical_input_tokens ?? (row.providerType === "claude" ? numeric(row.prompt_tokens) + numeric(row.cached_tokens) : numeric(row.prompt_tokens))),
+    row.token_semantics || (row.providerType === "claude" ? "input_excludes_cache_read_write" : "input_includes_cache_read"),
     numeric(row.total_tokens),
     typeof row.error === "string" || row.error == null ? row.error : JSON.stringify(row.error),
     preservePayload ? JSON.stringify(row) : null,
@@ -157,6 +198,11 @@ function decodeRow(row) {
     prompt_tokens: row.prompt_tokens,
     completion_tokens: row.completion_tokens,
     cached_tokens: row.cached_tokens,
+    cache_read_tokens: row.cache_read_tokens ?? row.cached_tokens,
+    cache_write_tokens: row.cache_write_tokens || 0,
+    uncached_input_tokens: row.uncached_input_tokens ?? Math.max(0, row.prompt_tokens - row.cached_tokens),
+    logical_input_tokens: row.logical_input_tokens ?? row.prompt_tokens,
+    token_semantics: row.token_semantics || "input_includes_cache_read",
     total_tokens: row.total_tokens,
     error: row.error,
   };
@@ -262,6 +308,11 @@ function initializeDatabase(db) {
       prompt_tokens INTEGER NOT NULL,
       completion_tokens INTEGER NOT NULL,
       cached_tokens INTEGER NOT NULL,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+      logical_input_tokens INTEGER NOT NULL DEFAULT 0,
+      token_semantics TEXT NOT NULL DEFAULT 'input_includes_cache_read',
       total_tokens INTEGER NOT NULL,
       error TEXT,
       payload_json TEXT,
@@ -276,7 +327,35 @@ function initializeDatabase(db) {
         prompt_tokens, completion_tokens
       );
   `);
-  db.prepare("INSERT OR IGNORE INTO usage_meta (key, value) VALUES ('schema_version', ?)").run(
+  const columns = new Set(db.prepare("PRAGMA table_info(usage_events)").all().map((column) => column.name));
+  const additions = [
+    ["cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["uncached_input_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["logical_input_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["token_semantics", "TEXT NOT NULL DEFAULT 'input_includes_cache_read'"],
+  ];
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE usage_events ADD COLUMN ${name} ${definition}`);
+  }
+  db.exec(`
+    UPDATE usage_events SET
+      cache_read_tokens = cached_tokens,
+      uncached_input_tokens = CASE
+        WHEN provider_type = 'claude' THEN prompt_tokens
+        ELSE MAX(prompt_tokens - cached_tokens, 0)
+      END,
+      logical_input_tokens = CASE
+        WHEN provider_type = 'claude' THEN prompt_tokens + cached_tokens
+        ELSE prompt_tokens
+      END,
+      token_semantics = CASE
+        WHEN provider_type = 'claude' THEN 'input_excludes_cache_read_write'
+        ELSE 'input_includes_cache_read'
+      END
+    WHERE logical_input_tokens = 0 AND (prompt_tokens > 0 OR cached_tokens > 0)
+  `);
+  db.prepare("INSERT INTO usage_meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(
     String(SCHEMA_VERSION)
   );
 }
@@ -327,9 +406,10 @@ function createUsageStore(databasePath, { legacyPath } = {}) {
   const insert = db.prepare(`
     INSERT INTO usage_events (
       at, model, upstream, provider_id, provider_type, provider_name, account_alias,
-      status, stream, prompt_tokens, completion_tokens, cached_tokens, total_tokens,
-      error, payload_json, provider_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      status, stream, prompt_tokens, completion_tokens, cached_tokens,
+      cache_read_tokens, cache_write_tokens, uncached_input_tokens, logical_input_tokens, token_semantics,
+      total_tokens, error, payload_json, provider_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   migrateLegacyJson(db, insert, legacyPath);
 
@@ -358,6 +438,10 @@ function createUsageStore(databasePath, { legacyPath } = {}) {
           COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
           COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
           COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+          COALESCE(SUM(uncached_input_tokens), 0) AS uncached_input_tokens,
+          COALESCE(SUM(logical_input_tokens), 0) AS logical_input_tokens,
           COALESCE(SUM(total_tokens), 0) AS total_tokens
         FROM usage_events ${period.sql}
       `)
@@ -370,7 +454,11 @@ function createUsageStore(databasePath, { legacyPath } = {}) {
           COUNT(*) AS requests,
           COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
           COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-          COALESCE(SUM(cached_tokens), 0) AS cached_tokens
+          COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+          COALESCE(SUM(uncached_input_tokens), 0) AS uncached_input_tokens,
+          COALESCE(SUM(logical_input_tokens), 0) AS logical_input_tokens
         FROM usage_events ${period.sql}
         GROUP BY COALESCE(model, 'unknown')
         ORDER BY requests DESC, MAX(id) DESC
@@ -395,15 +483,22 @@ function createUsageStore(databasePath, { legacyPath } = {}) {
           COUNT(*) AS requests,
           COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
           COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+          COALESCE(SUM(uncached_input_tokens), 0) AS uncached_input_tokens,
+          COALESCE(SUM(logical_input_tokens), 0) AS logical_input_tokens,
+          MIN(token_semantics) = MAX(token_semantics) AS uniform_semantics,
+          MIN(token_semantics) AS token_semantics_value,
           MAX(id) AS newest_id
         FROM usage_events ${period.sql}
         GROUP BY provider_key
         ORDER BY requests DESC, newest_id DESC
       `)
       .all(...period.params)
-      .map(({ provider_key: _providerKey, newest_id: _newestId, ...entry }) => ({
+      .map(({ provider_key: _providerKey, newest_id: _newestId, uniform_semantics: uniform, token_semantics_value: semantics, ...entry }) => ({
         provider: providerAggregateLabel(entry),
         ...entry,
+        token_semantics: uniform ? semantics : "mixed",
       }));
 
     const recentRows = db
@@ -419,6 +514,10 @@ function createUsageStore(databasePath, { legacyPath } = {}) {
       prompt_tokens: totals.prompt_tokens,
       completion_tokens: totals.completion_tokens,
       cached_tokens: totals.cached_tokens,
+      cache_read_tokens: totals.cache_read_tokens,
+      cache_write_tokens: totals.cache_write_tokens,
+      uncached_input_tokens: totals.uncached_input_tokens,
+      logical_input_tokens: totals.logical_input_tokens,
       total_tokens: totals.total_tokens,
       byModel,
       byProvider,

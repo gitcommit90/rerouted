@@ -1043,6 +1043,7 @@ describe("format translation", () => {
       {
         type: "image",
         source: { type: "url", url: "https://example.com/photo.jpg" },
+        cache_control: { type: "ephemeral" },
       },
     ]);
 
@@ -2033,7 +2034,7 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
   it("pipeAnthropicSseToOpenAi emits OpenAI chunks", async () => {
     const { Readable } = require("node:stream");
     const events = [
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":7,"output_tokens":0,"cache_read_input_tokens":2}}}\n\n',
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":7,"output_tokens":0,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}\n\n',
       'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
@@ -2057,6 +2058,9 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
       prompt_tokens: 7,
       completion_tokens: 4,
       cached_tokens: 2,
+      cache_read_tokens: 2,
+      cache_write_tokens: 3,
+      cache_creation_input_tokens: 3,
       total_tokens: 11,
     });
     assert.doesNotMatch(joined, /extra_content/);
