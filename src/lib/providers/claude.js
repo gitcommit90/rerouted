@@ -492,12 +492,25 @@ function toAnthropicBody(body, model, stream) {
   ) ?? -1;
   const preferredCacheBases = [];
 
+  const userBlocksWithToolResultsFirst = (blocks) => {
+    const toolResults = blocks.filter((block) => block?.type === "tool_result");
+    if (!toolResults.length) return blocks;
+    return [...toolResults, ...blocks.filter((block) => block?.type !== "tool_result")];
+  };
+
   const pushMessage = (role, blocks) => {
     if (!blocks.length) return;
-    // Merge consecutive same-role messages only when no tool blocks (simple text chats)
-    const hasTool =
-      blocks.some((b) => b.type === "tool_use" || b.type === "tool_result");
     const last = messages[messages.length - 1];
+    // Anthropic requires every result for one parallel assistant tool batch in
+    // the immediately following *single* user message, with tool_result blocks
+    // before text/images. OpenAI-compatible clients may emit each result and
+    // supplemental image evidence as separate consecutive user messages.
+    if (role === "user" && last?.role === "user" && Array.isArray(last.content)) {
+      last.content = userBlocksWithToolResultsFirst([...last.content, ...blocks]);
+      return;
+    }
+    // Keep the prior simple-text coalescing behavior for assistant messages.
+    const hasTool = blocks.some((b) => b.type === "tool_use" || b.type === "tool_result");
     if (
       last &&
       last.role === role &&
@@ -508,7 +521,7 @@ function toAnthropicBody(body, model, stream) {
       last.content.push(...blocks);
       return;
     }
-    messages.push({ role, content: blocks });
+    messages.push({ role, content: role === "user" ? userBlocksWithToolResultsFirst(blocks) : blocks });
   };
 
   for (let sourceIndex = 0; sourceIndex < sourceMessages.length; sourceIndex++) {

@@ -913,6 +913,41 @@ describe("format translation", () => {
     assert.equal(body.messages[2].content[0].tool_use_id, "call_1");
   });
 
+  it("groups parallel tool results and supplemental images into one Anthropic user message", () => {
+    const body = claude.toAnthropicBody(
+      {
+        messages: [
+          { role: "user", content: "inspect both images" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: "call_a", type: "function", function: { name: "view_image", arguments: '{"path":"a.png"}' } },
+              { id: "call_b", type: "function", function: { name: "view_image", arguments: '{"path":"b.png"}' } },
+              { id: "call_c", type: "function", function: { name: "run_command", arguments: '{"command":"echo ok"}' } },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_a", content: "viewed a" },
+          { role: "user", content: [{ type: "text", text: "image a" }, { type: "image_url", image_url: { url: "data:image/png;base64,YQ==" } }] },
+          { role: "tool", tool_call_id: "call_b", content: "viewed b" },
+          { role: "user", content: [{ type: "text", text: "image b" }, { type: "image_url", image_url: { url: "data:image/png;base64,Yg==" } }] },
+          { role: "tool", tool_call_id: "call_c", content: "ok" },
+        ],
+        max_tokens: 64,
+      },
+      "claude-opus-5-5",
+      false
+    );
+
+    assert.deepEqual(body.messages.map((message) => message.role), ["user", "assistant", "user"]);
+    assert.deepEqual(
+      body.messages[2].content.filter((block) => block.type === "tool_result").map((block) => block.tool_use_id),
+      ["call_a", "call_b", "call_c"]
+    );
+    assert.deepEqual(body.messages[2].content.slice(0, 3).map((block) => block.type), ["tool_result", "tool_result", "tool_result"]);
+    assert.equal(body.messages[2].content.filter((block) => block.type === "image").length, 2);
+  });
+
   it("anthropic tool_use → openai tool_calls", () => {
     const out = claude.fromAnthropicJson(
       {
