@@ -9,6 +9,20 @@ Release tags use the form `vX.Y.Z` and match `package.json`. GitHub Releases car
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-09-23
+
+### Changed
+
+- Provider-specific cache shaping now runs after route selection, so Claude receives stable and rolling cache breakpoints while ChatGPT and xAI receive stable request cache keys without leaking internal metadata to arbitrary OpenAI-compatible providers.
+- Claude OAuth requests now use the current Claude Code 2.1.280 client fingerprint.
+- Usage normalization now reports cache reads, cache writes, uncached input, and logical input consistently across provider accounting conventions.
+
+### Fixed
+
+- Manual provider model validation is bounded instead of hanging indefinitely when an upstream accepts a connection but never answers.
+- Claude cache prefixes remain reusable across human turns when volatile invocation context changes.
+- Parallel Claude tool results, including supplemental image blocks, are serialized into one immediately following user message with all `tool_result` blocks first, preventing Anthropic request-order failures.
+
 ## [0.5.12] - 2026-08-12
 
 ### Fixed

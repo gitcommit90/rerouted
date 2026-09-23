@@ -90,6 +90,29 @@ describe("SQLite usage history", () => {
     });
   });
 
+  it("normalizes cache read, cache write, uncached, and provider token semantics", () => {
+    withTempUsage((directory) => {
+      const store = createUsageStore(path.join(directory, "usage.sqlite"));
+      try {
+        store.record({ providerType: "chatgpt", status: 200, prompt_tokens: 100, cached_tokens: 80, completion_tokens: 5, total_tokens: 105 });
+        store.record({ providerType: "claude", status: 200, prompt_tokens: 20, cached_tokens: 70, cache_write_tokens: 10, completion_tokens: 5, total_tokens: 25 });
+        const usage = store.aggregate("all");
+        assert.equal(usage.cache_read_tokens, 150);
+        assert.equal(usage.cache_write_tokens, 10);
+        assert.equal(usage.uncached_input_tokens, 50);
+        assert.equal(usage.logical_input_tokens, 200);
+        const recent = store.recent(2);
+        assert.equal(recent[0].token_semantics, "input_excludes_cache_read_write");
+        assert.equal(recent[0].logical_input_tokens, 100);
+        assert.equal(recent[0].uncached_input_tokens, 30);
+        assert.equal(recent[1].token_semantics, "input_includes_cache_read");
+        assert.equal(recent[1].uncached_input_tokens, 20);
+      } finally {
+        store.close();
+      }
+    });
+  });
+
   it("preserves a corrupt database and starts a fresh usable history", () => {
     withTempUsage((directory) => {
       const databasePath = path.join(directory, "usage.sqlite");

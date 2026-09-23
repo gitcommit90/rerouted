@@ -9,7 +9,7 @@ const cfg = OAUTH.claude;
 const ANTHROPIC_METADATA = Symbol.for("rerouted.anthropic.metadata");
 
 /** Provider-compatible request metadata and system-block shaping. */
-const CLAUDE_CLI_VERSION = "2.1.251";
+const CLAUDE_CLI_VERSION = "2.1.280";
 const CC_ENTRYPOINT = "cli";
 
 const ANTHROPIC_BETA =
@@ -135,7 +135,7 @@ function wrapSystemReminder(text) {
   );
 }
 
-function prependToFirstUserMessage(messages, text) {
+function prependToFirstUserMessage(messages, text, cacheControl) {
   if (!Array.isArray(messages) || !messages.length) return messages;
   const out = messages.map((m) => ({
     ...m,
@@ -144,15 +144,17 @@ function prependToFirstUserMessage(messages, text) {
   const idx = out.findIndex((m) => m.role === "user");
   if (idx < 0) return out;
   const m = out[idx];
+  const reminder = {
+    type: "text",
+    text,
+    ...(cacheControl ? { cache_control: cacheControl } : {}),
+  };
   if (typeof m.content === "string") {
-    out[idx] = { ...m, content: text + m.content };
+    out[idx] = { ...m, content: [reminder, { type: "text", text: m.content }] };
   } else if (Array.isArray(m.content)) {
-    out[idx] = {
-      ...m,
-      content: [{ type: "text", text }, ...m.content],
-    };
+    out[idx] = { ...m, content: [reminder, ...m.content] };
   } else {
-    out[idx] = { ...m, content: [{ type: "text", text: text + String(m.content ?? "") }] };
+    out[idx] = { ...m, content: [reminder, { type: "text", text: String(m.content ?? "") }] };
   }
   return out;
 }
@@ -179,11 +181,14 @@ function applyCloaking(body, accessToken, sessionId) {
 
   // Capture original client system for move to user message
   let userSystemText = "";
+  let userSystemCacheControl;
   if (Array.isArray(result.system)) {
     userSystemText = result.system
       .map((b) => (typeof b === "string" ? b : b?.text || ""))
       .filter(Boolean)
       .join("\n\n");
+    userSystemCacheControl = result.system.findLast?.((block) => block?.cache_control)?.cache_control
+      || [...result.system].reverse().find((block) => block?.cache_control)?.cache_control;
   } else if (typeof result.system === "string") {
     userSystemText = result.system;
   }
@@ -198,7 +203,8 @@ function applyCloaking(body, accessToken, sessionId) {
     if (sanitized) {
       result.messages = prependToFirstUserMessage(
         result.messages || [],
-        wrapSystemReminder(sanitized)
+        wrapSystemReminder(sanitized),
+        userSystemCacheControl
       );
     }
   }
@@ -392,6 +398,84 @@ function contentBlocksFromMessage(msg) {
   return blocks;
 }
 
+function hasExplicitCacheControl(payload) {
+  const system = Array.isArray(payload.system) ? payload.system : [];
+  const messageBlocks = (payload.messages || []).flatMap((message) =>
+    Array.isArray(message.content) ? message.content : []
+  );
+  return [...system, ...messageBlocks].some((block) => block?.cache_control);
+}
+
+/** Apply Claude's four-breakpoint policy only after the router has selected
+ * Claude. Explicit client-authored breakpoints remain authoritative. */
+function applyAutomaticCacheControl(payload, preferredBaseBlocks = []) {
+  if (hasExplicitCacheControl(payload)) return payload;
+
+  const baseBlocks = [...new Set((Array.isArray(preferredBaseBlocks) ? preferredBaseBlocks : [preferredBaseBlocks]).filter(Boolean))];
+  if (!baseBlocks.length) {
+    let baseBlock = null;
+    for (const message of payload.messages || []) {
+      if (message.role !== "user" || !Array.isArray(message.content)) continue;
+      if (message.content.some((block) => block?.type === "tool_result")) continue;
+      for (let index = message.content.length - 1; index >= 0; index--) {
+        const block = message.content[index];
+        if (block?.type === "text" || block?.type === "image") {
+          baseBlock = block;
+          break;
+        }
+      }
+    }
+    if (baseBlock) baseBlocks.push(baseBlock);
+  }
+  for (const block of baseBlocks) block.cache_control = { type: "ephemeral" };
+
+  const toolResults = [];
+  for (const message of payload.messages || []) {
+    for (const block of Array.isArray(message.content) ? message.content : []) {
+      if (block?.type === "tool_result") toolResults.push(block);
+    }
+  }
+  const availableToolBreakpoints = Math.max(0, 4 - baseBlocks.length);
+  if (availableToolBreakpoints > 0) {
+    for (const block of toolResults.slice(-availableToolBreakpoints)) {
+      block.cache_control = { type: "ephemeral" };
+    }
+  }
+  return payload;
+}
+
+function systemCacheScope(message) {
+  return message?.extra_content?.openai?.cache_scope || "";
+}
+
+function systemTextBlocks(message) {
+  const nativeSystem = message?.[ANTHROPIC_METADATA]?.content;
+  if (Array.isArray(nativeSystem)) return JSON.parse(JSON.stringify(nativeSystem));
+  if (typeof nativeSystem === "string") return [{ type: "text", text: nativeSystem }];
+  if (typeof message?.content === "string") return [{ type: "text", text: message.content }];
+  if (Array.isArray(message?.content)) {
+    return message.content
+      .filter((part) => part?.type === "text" && part.text != null)
+      .map((part) => ({
+        type: "text",
+        text: String(part.text),
+        ...(part.cache_control ? { cache_control: part.cache_control } : {}),
+      }));
+  }
+  return message?.content != null ? [{ type: "text", text: String(message.content) }] : [];
+}
+
+function lastCacheableMessageBlock(messages) {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const blocks = Array.isArray(messages[messageIndex]?.content) ? messages[messageIndex].content : [];
+    for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
+      const block = blocks[blockIndex];
+      if (["text", "image", "tool_result"].includes(block?.type)) return block;
+    }
+  }
+  return null;
+}
+
 /**
  * Convert OpenAI chat messages → Anthropic messages + system + tools.
  * Critical: tool_result must be in a user message; tool_use only on assistant.
@@ -400,13 +484,33 @@ function contentBlocksFromMessage(msg) {
 function toAnthropicBody(body, model, stream) {
   const systemParts = [];
   const messages = [];
+  const sourceMessages = body.messages || [];
+  const hasScopedSystem = sourceMessages.some((message) => message.role === "system" && systemCacheScope(message));
+  const deferredDynamicSystemParts = [];
+  const lastDynamicSystemIndex = sourceMessages.findLastIndex?.(
+    (message) => message.role === "system" && systemCacheScope(message) === "dynamic_context"
+  ) ?? -1;
+  const preferredCacheBases = [];
+
+  const userBlocksWithToolResultsFirst = (blocks) => {
+    const toolResults = blocks.filter((block) => block?.type === "tool_result");
+    if (!toolResults.length) return blocks;
+    return [...toolResults, ...blocks.filter((block) => block?.type !== "tool_result")];
+  };
 
   const pushMessage = (role, blocks) => {
     if (!blocks.length) return;
-    // Merge consecutive same-role messages only when no tool blocks (simple text chats)
-    const hasTool =
-      blocks.some((b) => b.type === "tool_use" || b.type === "tool_result");
     const last = messages[messages.length - 1];
+    // Anthropic requires every result for one parallel assistant tool batch in
+    // the immediately following *single* user message, with tool_result blocks
+    // before text/images. OpenAI-compatible clients may emit each result and
+    // supplemental image evidence as separate consecutive user messages.
+    if (role === "user" && last?.role === "user" && Array.isArray(last.content)) {
+      last.content = userBlocksWithToolResultsFirst([...last.content, ...blocks]);
+      return;
+    }
+    // Keep the prior simple-text coalescing behavior for assistant messages.
+    const hasTool = blocks.some((b) => b.type === "tool_use" || b.type === "tool_result");
     if (
       last &&
       last.role === role &&
@@ -417,35 +521,31 @@ function toAnthropicBody(body, model, stream) {
       last.content.push(...blocks);
       return;
     }
-    messages.push({ role, content: blocks });
+    messages.push({ role, content: role === "user" ? userBlocksWithToolResultsFirst(blocks) : blocks });
   };
 
-  for (const m of body.messages || []) {
+  for (let sourceIndex = 0; sourceIndex < sourceMessages.length; sourceIndex++) {
+    const m = sourceMessages[sourceIndex];
     if (m.role === "system") {
-      const nativeSystem = m[ANTHROPIC_METADATA]?.content;
-      if (Array.isArray(nativeSystem)) {
-        systemParts.push(...JSON.parse(JSON.stringify(nativeSystem)));
+      const parts = systemTextBlocks(m);
+      const scope = systemCacheScope(m);
+      if (!hasScopedSystem || scope === "stable_instruction" || !scope) {
+        systemParts.push(...parts);
         continue;
       }
-      if (typeof nativeSystem === "string") {
-        systemParts.push({ type: "text", text: nativeSystem });
+      if (scope === "dynamic_context") {
+        deferredDynamicSystemParts.push(...parts);
+        if (sourceIndex !== lastDynamicSystemIndex) continue;
+        const stableBase = [...systemParts].reverse().find((block) => block?.type === "text" || block?.type === "image") || null;
+        const rollingBase = lastCacheableMessageBlock(messages);
+        if (stableBase) preferredCacheBases.push(stableBase);
+        if (rollingBase) preferredCacheBases.push(rollingBase);
+        const text = deferredDynamicSystemParts.map((part) => part?.text || "").filter(Boolean).join("\n\n");
+        if (text) pushMessage("user", [{ type: "text", text: wrapSystemReminder(text) }]);
         continue;
       }
-      if (typeof m.content === "string") {
-        systemParts.push({ type: "text", text: m.content });
-      } else if (Array.isArray(m.content)) {
-        for (const part of m.content) {
-          if (part?.type === "text" && part.text != null) {
-            systemParts.push({
-              type: "text",
-              text: String(part.text),
-              ...(part.cache_control ? { cache_control: part.cache_control } : {}),
-            });
-          }
-        }
-      } else if (m.content != null) {
-        systemParts.push({ type: "text", text: String(m.content) });
-      }
+      const text = parts.map((part) => part?.text || "").filter(Boolean).join("\n\n");
+      if (text) pushMessage("user", [{ type: "text", text: wrapSystemReminder(text) }]);
       continue;
     }
     const blocks = contentBlocksFromMessage(m);
@@ -476,7 +576,7 @@ function toAnthropicBody(body, model, stream) {
     stream: !!stream,
   };
   if (systemParts.length) {
-    out.system = systemParts.some((part) => part.cache_control)
+    out.system = hasScopedSystem || systemParts.some((part) => part.cache_control)
       ? systemParts
       : systemParts.map((part) => part.text).join("\n\n");
   }
@@ -521,7 +621,7 @@ function toAnthropicBody(body, model, stream) {
   for (const [key, value] of Object.entries(body[ANTHROPIC_METADATA]?.options || {})) {
     out[key] = JSON.parse(JSON.stringify(value));
   }
-  return applyClaudeEffort(out, body, model);
+  return applyAutomaticCacheControl(applyClaudeEffort(out, body, model), preferredCacheBases);
 }
 
 function mapStopReason(stopReason) {
@@ -613,6 +713,8 @@ async function pipeAnthropicSseToOpenAi(
       prompt_tokens: 0,
       completion_tokens: 0,
       cached_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
       total_tokens: 0,
     };
     if (usage.input_tokens != null) current.prompt_tokens = Number(usage.input_tokens) || 0;
@@ -621,6 +723,11 @@ async function pipeAnthropicSseToOpenAi(
     }
     if (usage.cache_read_input_tokens != null) {
       current.cached_tokens = Number(usage.cache_read_input_tokens) || 0;
+      current.cache_read_tokens = Number(usage.cache_read_input_tokens) || 0;
+    }
+    if (usage.cache_creation_input_tokens != null) {
+      current.cache_write_tokens = Number(usage.cache_creation_input_tokens) || 0;
+      current.cache_creation_input_tokens = Number(usage.cache_creation_input_tokens) || 0;
     }
     current.total_tokens = current.prompt_tokens + current.completion_tokens;
     streamUsage = current;
@@ -861,5 +968,6 @@ module.exports = {
   generateFakeUserId,
   anthropicHeaders,
   stableSessionId,
+  applyAutomaticCacheControl,
   cfg,
 };

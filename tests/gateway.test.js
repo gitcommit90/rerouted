@@ -831,14 +831,14 @@ describe("claude oauth request shaping", () => {
     const h = seen.opts.headers;
     assert.equal(h["X-App"], "cli");
     assert.ok(String(h["User-Agent"]).startsWith("claude-cli/"));
-    assert.ok(String(h["User-Agent"]).includes("2.1.251"), "new Claude models require the current supported CLI fingerprint");
+    assert.ok(String(h["User-Agent"]).includes("2.1.280"), "new Claude models require the current supported CLI fingerprint");
     assert.ok(String(h["User-Agent"]).includes("(external, cli)"));
     assert.ok(h["X-Stainless-Os"]);
     assert.ok(h["X-Claude-Code-Session-Id"]);
     assert.ok(String(h["Anthropic-Beta"]).includes("oauth-2025-04-20"));
     const body = JSON.parse(seen.opts.body);
     assert.ok(body.system?.[0]?.text?.startsWith("x-anthropic-billing-header:"));
-    assert.ok(body.system[0].text.includes("cc_version=2.1.251."));
+    assert.ok(body.system[0].text.includes("cc_version=2.1.280."));
     assert.equal(body.system.length, 3);
     assert.ok(body.metadata?.user_id);
   });
@@ -911,6 +911,41 @@ describe("format translation", () => {
     assert.equal(body.messages[2].role, "user");
     assert.equal(body.messages[2].content[0].type, "tool_result");
     assert.equal(body.messages[2].content[0].tool_use_id, "call_1");
+  });
+
+  it("groups parallel tool results and supplemental images into one Anthropic user message", () => {
+    const body = claude.toAnthropicBody(
+      {
+        messages: [
+          { role: "user", content: "inspect both images" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: "call_a", type: "function", function: { name: "view_image", arguments: '{"path":"a.png"}' } },
+              { id: "call_b", type: "function", function: { name: "view_image", arguments: '{"path":"b.png"}' } },
+              { id: "call_c", type: "function", function: { name: "run_command", arguments: '{"command":"echo ok"}' } },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_a", content: "viewed a" },
+          { role: "user", content: [{ type: "text", text: "image a" }, { type: "image_url", image_url: { url: "data:image/png;base64,YQ==" } }] },
+          { role: "tool", tool_call_id: "call_b", content: "viewed b" },
+          { role: "user", content: [{ type: "text", text: "image b" }, { type: "image_url", image_url: { url: "data:image/png;base64,Yg==" } }] },
+          { role: "tool", tool_call_id: "call_c", content: "ok" },
+        ],
+        max_tokens: 64,
+      },
+      "claude-opus-5-5",
+      false
+    );
+
+    assert.deepEqual(body.messages.map((message) => message.role), ["user", "assistant", "user"]);
+    assert.deepEqual(
+      body.messages[2].content.filter((block) => block.type === "tool_result").map((block) => block.tool_use_id),
+      ["call_a", "call_b", "call_c"]
+    );
+    assert.deepEqual(body.messages[2].content.slice(0, 3).map((block) => block.type), ["tool_result", "tool_result", "tool_result"]);
+    assert.equal(body.messages[2].content.filter((block) => block.type === "image").length, 2);
   });
 
   it("anthropic tool_use → openai tool_calls", () => {
@@ -1043,6 +1078,7 @@ describe("format translation", () => {
       {
         type: "image",
         source: { type: "url", url: "https://example.com/photo.jpg" },
+        cache_control: { type: "ephemeral" },
       },
     ]);
 
@@ -2033,7 +2069,7 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
   it("pipeAnthropicSseToOpenAi emits OpenAI chunks", async () => {
     const { Readable } = require("node:stream");
     const events = [
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":7,"output_tokens":0,"cache_read_input_tokens":2}}}\n\n',
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":7,"output_tokens":0,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}\n\n',
       'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
@@ -2057,6 +2093,9 @@ describe("OAuth → OpenAI SSE translation pipes", () => {
       prompt_tokens: 7,
       completion_tokens: 4,
       cached_tokens: 2,
+      cache_read_tokens: 2,
+      cache_write_tokens: 3,
+      cache_creation_input_tokens: 3,
       total_tokens: 11,
     });
     assert.doesNotMatch(joined, /extra_content/);

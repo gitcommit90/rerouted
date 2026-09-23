@@ -186,8 +186,11 @@ async function listModels(provider, { fetchImpl = fetch, timeoutMs = MODELS_TIME
  */
 async function chat(provider, { model, body, stream, signal, fetchImpl = fetch } = {}) {
   const url = joinUrl(provider.baseUrl, "chat/completions");
+  // prompt_cache_key is provider-selected metadata for ChatGPT/xAI. Do not
+  // leak it to arbitrary OpenAI-compatible servers that may reject extensions.
+  const { prompt_cache_key: _promptCacheKey, ...compatibleBody } = body;
   const payload = {
-    ...body,
+    ...compatibleBody,
     ...(body.generationConfig
       ? { generationConfig: { ...body.generationConfig } }
       : {}),

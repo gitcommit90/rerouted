@@ -130,11 +130,30 @@ function toolArguments(value) {
 function toResponsesInput(messages, model, reasoningScope) {
   const input = [];
   const instructions = [];
+  const deferredDynamicContext = [];
 
   for (const message of messages || []) {
     if (!message || typeof message !== "object") continue;
     if (message.role === "system") {
-      instructions.push(textFromOpenAiContent(message.content));
+      const cacheScope = message.extra_content?.openai?.cache_scope;
+      const text = textFromOpenAiContent(message.content);
+      if (cacheScope === "dynamic_context") {
+        deferredDynamicContext.push({
+          type: "message",
+          role: "developer",
+          content: toResponsesContent(message.content, "developer"),
+        });
+      } else if (cacheScope === "inline_context") {
+        input.push({
+          type: "message",
+          role: "developer",
+          content: toResponsesContent(message.content, "developer"),
+        });
+      } else {
+        // Unmarked clients retain the historical behavior. 1Helm explicitly
+        // marks only its durable identity/capability blocks as instructions.
+        instructions.push(text);
+      }
       continue;
     }
     if (message.role === "tool") {
@@ -195,6 +214,21 @@ function toResponsesInput(messages, model, reasoningScope) {
     }
   }
 
+  if (deferredDynamicContext.length) {
+    // 1Helm's volatile time, recalled memory, session state, and invocation
+    // evidence belong immediately before the current user turn. Keeping them
+    // out of `instructions` leaves the durable instructions + append-only
+    // conversation as an exact provider-cache prefix across turns.
+    let insertionIndex = input.length;
+    for (let index = input.length - 1; index >= 0; index--) {
+      if (input[index]?.type === "message" && input[index]?.role === "user") {
+        insertionIndex = index;
+        break;
+      }
+    }
+    input.splice(insertionIndex, 0, ...deferredDynamicContext);
+  }
+
   return { input, instructions };
 }
 
@@ -251,6 +285,9 @@ function toResponsesBody(body, model, stream, { reasoningScope } = {}) {
   if (toolChoice !== undefined) out.tool_choice = toolChoice;
   if (body.parallel_tool_calls !== undefined) {
     out.parallel_tool_calls = body.parallel_tool_calls;
+  }
+  if (body.prompt_cache_key !== undefined) {
+    out.prompt_cache_key = body.prompt_cache_key;
   }
   const include = Array.isArray(body.include) ? [...body.include] : [];
   if (!include.includes("reasoning.encrypted_content")) {
